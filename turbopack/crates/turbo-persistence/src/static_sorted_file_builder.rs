@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     cmp::min,
     fs::File,
-    io::{BufWriter, Seek, Write},
+    io::{BufWriter, Write},
     path::Path,
 };
 
@@ -120,7 +120,7 @@ pub fn write_static_stored_file<E: Entry>(
 ) -> Result<(StaticSortedFileBuilderMeta<'static>, File)> {
     debug_assert!(entries.iter().map(|e| e.key_hash()).is_sorted());
 
-    let mut file = BufWriter::new(File::create(file)?);
+    let mut file = BufWriter::with_capacity(256 * 1024, File::create(file)?);
 
     let capacity = get_compression_buffer_capacity(total_key_size);
     // We use a shared buffer for all operations to avoid excessive allocations
@@ -150,6 +150,12 @@ pub fn write_static_stored_file<E: Entry>(
     let max_hash = entries.last().map_or(0, |e| e.key_hash());
 
     let block_count = block_writer.block_count();
+    let block_data_size = block_writer
+        .block_offsets
+        .last()
+        .copied()
+        .unwrap_or_default() as u64;
+    let offset_table_size = (block_writer.block_offsets.len() * 4) as u64;
     for offset in &block_writer.block_offsets {
         file.write_u32::<BE>(*offset)
             .context("Failed to write block offset")?;
@@ -161,7 +167,7 @@ pub fn write_static_stored_file<E: Entry>(
         amqf: Cow::Owned(amqf.into_vec()),
         key_compression_dictionary_length: key_dict.len().try_into().unwrap(),
         block_count,
-        size: file.stream_position()?,
+        size: key_dict.len() as u64 + block_data_size + offset_table_size,
         flags,
         entries: entries.len() as u64,
     };
@@ -520,7 +526,8 @@ fn write_key_blocks_and_compute_amqf(
         {
             let entry_count = i - current_block_start;
             let has_hash = use_hash(current_block_max_key_len);
-            let mut block = KeyBlockBuilder::new(buffer, entry_count as u32, has_hash);
+            let mut block =
+                KeyBlockBuilder::new(buffer, entry_count as u32, has_hash, current_block_size);
             for j in current_block_start..i {
                 let entry = &entries[j];
                 let value_location = &value_locations[j];
@@ -546,7 +553,8 @@ fn write_key_blocks_and_compute_amqf(
     if current_block_size > 0 {
         let entry_count = entries.len() - current_block_start;
         let has_hash = use_hash(current_block_max_key_len);
-        let mut block = KeyBlockBuilder::new(buffer, entry_count as u32, has_hash);
+        let mut block =
+            KeyBlockBuilder::new(buffer, entry_count as u32, has_hash, current_block_size);
         for j in current_block_start..entries.len() {
             let entry = &entries[j];
             let value_location = &value_locations[j];
@@ -594,11 +602,16 @@ const KEY_BLOCK_HEADER_SIZE: usize = 4;
 
 impl<'l> KeyBlockBuilder<'l> {
     /// Creates a new key block builder for the number of entries.
-    pub fn new(buffer: &'l mut Vec<u8>, entry_count: u32, has_hash: bool) -> Self {
+    /// `estimated_content_size` should be the sum of key lengths + per-entry metadata overhead.
+    pub fn new(
+        buffer: &'l mut Vec<u8>,
+        entry_count: u32,
+        has_hash: bool,
+        estimated_content_size: usize,
+    ) -> Self {
         debug_assert!(entry_count < (1 << 24));
 
-        const ESTIMATED_KEY_SIZE: usize = 16;
-        buffer.reserve(entry_count as usize * ESTIMATED_KEY_SIZE);
+        buffer.reserve(KEY_BLOCK_HEADER_SIZE + entry_count as usize * 4 + estimated_content_size);
         let block_type = if has_hash {
             BLOCK_TYPE_KEY_WITH_HASH
         } else {

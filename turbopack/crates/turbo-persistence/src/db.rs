@@ -532,7 +532,7 @@ impl<S: ParallelScheduler, const FAMILIES: usize> TurboPersistence<S, FAMILIES> 
         let mut new_meta_files = self
             .parallel_scheduler
             .parallel_map_collect_owned::<_, _, Result<Vec<_>>>(new_meta_files, |(seq, file)| {
-                file.sync_all()?;
+                file.sync_data()?;
                 let meta_file = MetaFile::open(&self.path, seq)?;
                 Ok(meta_file)
             })?;
@@ -542,15 +542,16 @@ impl<S: ParallelScheduler, const FAMILIES: usize> TurboPersistence<S, FAMILIES> 
             sst_filter.apply_filter(meta_file);
         }
 
-        self.parallel_scheduler.block_in_place(|| {
-            for (_, file) in new_sst_files.iter() {
-                file.sync_all()?;
-            }
-            for (_, file) in new_blob_files.iter() {
-                file.sync_all()?;
-            }
-            anyhow::Ok(())
-        })?;
+        self.parallel_scheduler
+            .try_parallel_for_each(&new_sst_files, |(_, file)| {
+                file.sync_data()?;
+                anyhow::Ok(())
+            })?;
+        self.parallel_scheduler
+            .try_parallel_for_each(&new_blob_files, |(_, file)| {
+                file.sync_data()?;
+                anyhow::Ok(())
+            })?;
         drop(sync_span);
 
         let new_meta_info = new_meta_files
@@ -628,7 +629,7 @@ impl<S: ParallelScheduler, const FAMILIES: usize> TurboPersistence<S, FAMILIES> 
                 }
                 let mut file = File::create(self.path.join(format!("{seq:08}.del")))?;
                 file.write_all(&buf)?;
-                file.sync_all()?;
+                file.sync_data()?;
             }
 
             let mut current_file = OpenOptions::new()
@@ -637,7 +638,7 @@ impl<S: ParallelScheduler, const FAMILIES: usize> TurboPersistence<S, FAMILIES> 
                 .read(false)
                 .open(self.path.join("CURRENT"))?;
             current_file.write_u32::<BE>(seq)?;
-            current_file.sync_all()?;
+            current_file.sync_data()?;
 
             for seq in sst_seq_numbers_to_delete.iter() {
                 fs::remove_file(self.path.join(format!("{seq:08}.sst")))?;

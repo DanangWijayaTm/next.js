@@ -45,15 +45,18 @@ pub fn compress_into_buffer(
     _long_term: bool,
     buffer: &mut Vec<u8>,
 ) -> Result<()> {
-    let mut compressor = if let Some(dict) = dict {
-        lzzzz::lz4::Compressor::with_dict(dict)
+    if let Some(dict) = dict {
+        // Dictionary compression requires the streaming API to load the dict.
+        let mut compressor =
+            lzzzz::lz4::Compressor::with_dict(dict).context("LZ4 compressor creation failed")?;
+        compressor
+            .next_to_vec(block, buffer, ACC_LEVEL_DEFAULT)
+            .context("Compression failed")?;
     } else {
-        lzzzz::lz4::Compressor::new()
+        // Without a dictionary, use the block API which reuses a thread-local compression
+        // state, avoiding per-call allocations.
+        lzzzz::lz4::compress_to_vec(block, buffer, ACC_LEVEL_DEFAULT)
+            .context("Compression failed")?;
     }
-    .context("LZ4 compressor creation failed")?;
-    let acc_factor = ACC_LEVEL_DEFAULT;
-    compressor
-        .next_to_vec(block, buffer, acc_factor)
-        .context("Compression failed")?;
     Ok(())
 }
