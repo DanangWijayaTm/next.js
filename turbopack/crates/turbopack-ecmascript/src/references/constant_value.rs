@@ -33,21 +33,11 @@ impl ConstantValueCodeGen {
     pub fn new(value: CompileTimeDefineValue, path: AstPath) -> Self {
         ConstantValueCodeGen { value, path }
     }
-    pub fn new_jsvalue(value: ConstantValue, path: AstPath) -> Self {
-        ConstantValueCodeGen {
-            // TODO do this properly
-            value: match value {
-                ConstantValue::Undefined => CompileTimeDefineValue::Undefined,
-                ConstantValue::Null => CompileTimeDefineValue::Null,
-                ConstantValue::Str(v) => CompileTimeDefineValue::String(v.as_rcstr()),
-                ConstantValue::Num(v) => CompileTimeDefineValue::Number(v.0.to_string().into()),
-                ConstantValue::True => CompileTimeDefineValue::Bool(true),
-                ConstantValue::False => CompileTimeDefineValue::Bool(false),
-                ConstantValue::BigInt(_) => unimplemented!("ConstantValueCodeGen: Bigint"),
-                ConstantValue::Regex(_) => unimplemented!("ConstantValueCodeGen: Regex"),
-            },
+    pub fn new_constant(value: &ConstantValue, path: AstPath) -> Result<Self> {
+        Ok(ConstantValueCodeGen {
+            value: value.try_into()?,
             path,
-        }
+        })
     }
     pub async fn code_generation(
         &self,
