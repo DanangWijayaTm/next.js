@@ -458,13 +458,19 @@ pub enum JsValue {
     Array {
         total_nodes: u32,
         items: Vec<JsValue>,
+        // This value might be inaccurate because it can change after declaration. So reads always
+        // are an `<value> | Unknown` alternative
         mutable: bool,
     },
     /// An object of nested values
     Object {
         total_nodes: u32,
         parts: Vec<ObjectPart>,
+        // This value might be inaccurate because it can change after declaration. So reads always
+        // are an `<value> | Unknown` alternative
         mutable: bool,
+        // If true, any missing properties are treated as unknown, instead of undefined.
+        missing_unknown: bool,
     },
     /// A list of alternative values
     Alternatives {
@@ -631,6 +637,7 @@ impl TryFrom<&CompileTimeDefineValue> for JsValue {
                         })
                         .collect::<Result<Vec<_>>>()?,
                     mutable: false,
+                    missing_unknown: false,
                 };
                 js_value.update_total_nodes();
                 return Ok(js_value);
@@ -727,7 +734,11 @@ impl Display for JsValue {
         match self {
             JsValue::Constant(v) => write!(f, "{v}"),
             JsValue::Url(url, kind) => write!(f, "{url} {kind}"),
-            JsValue::Array { items, mutable, .. } => write!(
+            JsValue::Array {
+                items,
+                mutable,
+                total_nodes: _,
+            } => write!(
                 f,
                 "{}[{}]",
                 if *mutable { "" } else { "frozen " },
@@ -737,10 +748,20 @@ impl Display for JsValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            JsValue::Object { parts, mutable, .. } => write!(
+            JsValue::Object {
+                parts,
+                mutable,
+                missing_unknown,
+                total_nodes: _,
+            } => write!(
                 f,
-                "{}{{{}}}",
+                "{}{}{{{}}}",
                 if *mutable { "" } else { "frozen " },
+                if *missing_unknown {
+                    "missing_unknown "
+                } else {
+                    ""
+                },
                 parts
                     .iter()
                     .map(|v| v.to_string())
@@ -1094,6 +1115,7 @@ impl JsValue {
                 .sum::<u32>(),
             parts: list,
             mutable: true,
+            missing_unknown: false,
         }
     }
 
@@ -1108,6 +1130,22 @@ impl JsValue {
                 .sum::<u32>(),
             parts: list,
             mutable: false,
+            missing_unknown: false,
+        }
+    }
+
+    pub fn frozen_object_missing_unknown(list: Vec<ObjectPart>) -> Self {
+        Self::Object {
+            total_nodes: 1 + list
+                .iter()
+                .map(|v| match v {
+                    ObjectPart::KeyValue(k, v) => k.total_nodes() + v.total_nodes(),
+                    ObjectPart::Spread(s) => s.total_nodes(),
+                })
+                .sum::<u32>(),
+            parts: list,
+            mutable: false,
+            missing_unknown: true,
         }
     }
 
@@ -1274,6 +1312,7 @@ impl JsValue {
                 total_nodes: c,
                 parts,
                 mutable: _,
+                missing_unknown: _,
             } => {
                 *c = 1 + parts
                     .iter()
@@ -1391,7 +1430,11 @@ impl JsValue {
     ) -> String {
         match self {
             JsValue::Constant(v) => format!("{v}"),
-            JsValue::Array { items, mutable, .. } => format!(
+            JsValue::Array {
+                items,
+                mutable,
+                total_nodes: _,
+            } => format!(
                 "{}[{}]",
                 if *mutable { "" } else { "frozen " },
                 pretty_join(
@@ -1410,9 +1453,19 @@ impl JsValue {
                     ""
                 )
             ),
-            JsValue::Object { parts, mutable, .. } => format!(
-                "{}{{{}}}",
+            JsValue::Object {
+                parts,
+                mutable,
+                missing_unknown,
+                total_nodes: _,
+            } => format!(
+                "{}{}{{{}}}",
                 if *mutable { "" } else { "frozen " },
+                if *missing_unknown {
+                    "missing_unknown "
+                } else {
+                    ""
+                },
                 pretty_join(
                     &parts
                         .iter()
@@ -3135,13 +3188,15 @@ impl JsValue {
                     total_nodes: lc,
                     parts: lp,
                     mutable: lm,
+                    missing_unknown: lmu,
                 },
                 JsValue::Object {
                     total_nodes: rc,
                     parts: rp,
                     mutable: rm,
+                    missing_unknown: rmu,
                 },
-            ) => lc == rc && lm == rm && all_parts_similar(lp, rp, depth - 1),
+            ) => lc == rc && lm == rm && lmu == rmu && all_parts_similar(lp, rp, depth - 1),
             (JsValue::Url(l, kl), JsValue::Url(r, kr)) => l == r && kl == kr,
             (
                 JsValue::Alternatives {
