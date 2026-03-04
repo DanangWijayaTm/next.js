@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use num_bigint::BigInt;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
