@@ -77,7 +77,8 @@ pub async fn module_value_to_constants_module(
 
     let Some(ResolveResultItem::Source(source)) = source.primary.first().as_ref().map(|v| &v.1)
     else {
-        bail!("not a source, {:?}", source.primary);
+        // failed to resolve, ignore silently
+        return Ok(None);
     };
 
     let constants = get_constants(**source, compile_time_info).await?;
