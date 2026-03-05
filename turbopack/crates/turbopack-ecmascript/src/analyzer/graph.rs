@@ -509,7 +509,7 @@ impl EvalContext {
         }
     }
 
-    pub fn eval_ident(&self, id: Id) -> JsValue {
+    pub fn eval_id(&self, id: Id) -> JsValue {
         if let Some(imported) = self.imports.get_import(&id) {
             return imported;
         }
@@ -535,7 +535,7 @@ impl EvalContext {
         match e {
             Expr::Paren(e) => self.eval(&e.expr),
             Expr::Lit(e) => JsValue::Constant(e.clone().into()),
-            Expr::Ident(i) => self.eval_ident(i.to_id()),
+            Expr::Ident(i) => self.eval_id(i.to_id()),
 
             Expr::Unary(UnaryExpr {
                 op: op!("void"),
@@ -2635,14 +2635,14 @@ impl VisitAstPath for Analyzer<'_> {
                     // point to the MemberExpression instead
                     ast_path: as_parent_path_skip(ast_path, 1),
                     value: Box::new(JsValue::member(
-                        Box::new(self.eval_context.eval_ident(ident.to_id())),
+                        Box::new(self.eval_context.eval_id(ident.to_id())),
                         Box::new(prop),
                     )),
                     span: member.span(),
                 });
             } else {
                 self.add_effect(Effect::ImportedBinding {
-                    value: Box::new(self.eval_context.eval_ident(ident.to_id())),
+                    value: Box::new(self.eval_context.eval_id(ident.to_id())),
                     esm_reference_index,
                     export,
                     ast_path: as_parent_path(ast_path),
@@ -2654,7 +2654,7 @@ impl VisitAstPath for Analyzer<'_> {
 
         // If this identifier is free, produce an effect so we can potentially replace it later.
         if self.analyze_mode.is_code_gen()
-            && let JsValue::FreeVar(var) = self.eval_context.eval_ident(ident.to_id())
+            && let JsValue::FreeVar(var) = self.eval_context.eval_id(ident.to_id())
         {
             // TODO(lukesandberg): we should consider filtering effects here, e.g. there is no
             // benefit in an Effect for `window` or `Math`

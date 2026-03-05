@@ -206,7 +206,7 @@ pub async fn get_constants(
         .exports
         .iter()
         .map(async |(export_name, (binding, span))| {
-            let value = GLOBALS.set(globals, || eval_context.eval_ident(binding.clone()));
+            let value = GLOBALS.set(globals, || eval_context.eval_id(binding.clone()));
 
             let linked_value = link(
                 &var_graph,
