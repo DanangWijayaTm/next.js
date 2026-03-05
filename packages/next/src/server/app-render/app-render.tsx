@@ -4259,10 +4259,9 @@ async function spawnStaticShellValidationInDevImpl(
   let debugChunks: Uint8Array[] | null = null
   if (debugChannelClient) {
     debugChunks = []
-    const chunks = debugChunks
     ;(async () => {
-      for await (const c of debugChannelClient as AsyncIterable<Uint8Array>) {
-        chunks.push(c)
+      for await (const c of debugChannelClient) {
+        debugChunks.push(c)
       }
     })()
   }
