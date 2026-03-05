@@ -37,7 +37,6 @@ import {
   createNodeStreamFromChunks,
 } from './stream-utils'
 import { createDebugChannel } from '../debug-channel-server'
-import { renderToFlightStream } from '../stream-ops'
 import type { FlightComponentMod } from '../stream-ops'
 
 // eslint-disable-next-line import/no-extraneous-dependencies
@@ -199,8 +198,16 @@ export type StageEndTimes = {
  * Splits an existing staged stream (represented as arrays of chunks)
  * into separate staged streams (also in arrays-of-chunks form), one for each segment.
  * */
+type RenderToFlightStream = (
+  ComponentMod: FlightComponentMod,
+  payload: any,
+  clientModules: any,
+  opts: any
+) => AsyncIterable<Uint8Array>
+
 export async function collectStagedSegmentData(
   ComponentMod: FlightComponentMod,
+  renderFlightStream: RenderToFlightStream,
   fullPageChunks: StageChunks,
   fullPageDebugChunks: Uint8Array[] | null,
   startTime: number,
@@ -288,7 +295,7 @@ export async function collectStagedSegmentData(
       ? createDebugChannel()
       : undefined
 
-    const itemStream = renderToFlightStream(
+    const itemStream = renderFlightStream(
       ComponentMod,
       data,
       clientReferenceManifest.clientModules,
@@ -509,6 +516,7 @@ function writeChunk(
  * */
 export async function createCombinedPayloadStream(
   ComponentMod: FlightComponentMod,
+  renderFlightStream: RenderToFlightStream,
   payload: InitialRSCPayload,
   extraChunksAbortController: AbortController,
   renderSignal: AbortSignal,
@@ -529,7 +537,7 @@ export async function createCombinedPayloadStream(
 
   await runInSequentialTasks(
     () => {
-      const stream = renderToFlightStream(
+      const stream = renderFlightStream(
         ComponentMod,
         payload,
         clientReferenceManifest.clientModules,

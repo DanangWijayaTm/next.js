@@ -4738,6 +4738,7 @@ async function validateInstantConfigs(
     stageEndTimes,
   } = await collectStagedSegmentData(
     ctx.componentMod,
+    renderToFlightStream,
     {
       [RenderStage.Static]: accumulatedChunks.staticChunks,
       [RenderStage.Runtime]: accumulatedChunks.runtimeChunks,
@@ -4814,6 +4815,7 @@ async function validateInstantConfigs(
     const { stream: serverStream, debugStream } =
       await createCombinedPayloadStream(
         ctx.componentMod,
+        renderToFlightStream,
         payloadResult.payload,
         extraChunksController,
         reactController.signal,
