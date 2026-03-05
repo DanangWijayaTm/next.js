@@ -458,18 +458,20 @@ pub enum JsValue {
     Array {
         total_nodes: u32,
         items: Vec<JsValue>,
-        // This value might be inaccurate because it can change after declaration. So reads always
-        // are an `<value> | Unknown` alternative
+        /// This value might be inaccurate because it can change after declaration. So reads always
+        /// are an `<value> | Unknown` alternative
         mutable: bool,
     },
-    /// An object of nested values
+    //// An object of nested values
     Object {
         total_nodes: u32,
         parts: Vec<ObjectPart>,
-        // This value might be inaccurate because it can change after declaration. So reads always
-        // are an `<value> | Unknown` alternative
+        /// This value might be inaccurate because it can change after declaration. So reads always
+        /// are an `<value> | Unknown` alternative
         mutable: bool,
-        // If true, any missing properties are treated as unknown, instead of undefined.
+        /// If true, any missing properties are treated as unknown, instead of undefined. Note that
+        /// this is only interesting with `mutable: false`. Because with `mutable: true`, all
+        /// properties are a `<value> | Unknown` alternative anyway.
         missing_unknown: bool,
     },
     /// A list of alternative values

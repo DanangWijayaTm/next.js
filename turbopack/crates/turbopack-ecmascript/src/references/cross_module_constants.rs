@@ -103,6 +103,13 @@ impl ConstantsModule {
     pub fn as_js_value(&self, has_turbopack_annotation: bool) -> JsValue {
         let has_opt_in = self.has_directive || has_turbopack_annotation;
 
+        // This has to be
+        // - mutable:false, otherwise nothing would ever be inlined, because all property accesses
+        //   would be receive a `|unknown` alternative
+        // - frozen:true, otherwise mutable:false would cause accesses of missing properties to be
+        //   `undefined`. Because we return a JsValue::Object even if the module has only some
+        //   constants exports, this would cause `import {NON_CONSTANT_EXPORT}` to be incorrectly
+        //   replaced with `undefined`.
         JsValue::frozen_object_missing_unknown(
             self.exports
                 .iter()
