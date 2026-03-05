@@ -38,7 +38,7 @@ import {
 } from './stream-utils'
 import { createDebugChannel } from '../debug-channel-server'
 import { renderToFlightStream } from '../stream-ops'
-import type { AnyStream, FlightComponentMod } from '../stream-ops'
+import type { FlightComponentMod } from '../stream-ops'
 
 // eslint-disable-next-line import/no-extraneous-dependencies
 import { createFromNodeStream } from 'react-server-dom-webpack/client'
@@ -288,7 +288,7 @@ export async function collectStagedSegmentData(
       ? createDebugChannel()
       : undefined
 
-    const itemStream: AnyStream = renderToFlightStream(
+    const itemStream = renderToFlightStream(
       ComponentMod,
       data,
       clientReferenceManifest.clientModules,
@@ -529,7 +529,7 @@ export async function createCombinedPayloadStream(
 
   await runInSequentialTasks(
     () => {
-      const stream: AnyStream = renderToFlightStream(
+      const stream = renderToFlightStream(
         ComponentMod,
         payload,
         clientReferenceManifest.clientModules,
