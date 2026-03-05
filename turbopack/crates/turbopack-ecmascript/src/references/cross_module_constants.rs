@@ -83,70 +83,65 @@ pub async fn module_value_to_constants_module(
 
     let constants = get_constants(**source, compile_time_info).await?;
 
-    Ok(constants.as_js_value(module_value.annotations.has_turbopack_constants()))
+    Ok(constants
+        .as_ref()
+        .map(|constants| constants.as_js_value(module_value.annotations.has_turbopack_constants())))
 }
 
 #[turbo_tasks::value]
 #[derive(Debug)]
-enum ConstantsModule {
-    None,
-    Some {
-        exports: Vec<(RcStr, Option<ConstantValue>)>,
-        has_directive: bool,
-    },
+struct ConstantsModule {
+    exports: Vec<(RcStr, Option<ConstantValue>)>,
+    has_directive: bool,
 }
 
-impl ConstantsModule {
-    pub fn as_js_value(&self, has_turbopack_annotation: bool) -> Option<JsValue> {
-        if let ConstantsModule::Some {
-            exports,
-            has_directive,
-        } = self
-        {
-            let has_opt_in = *has_directive || has_turbopack_annotation;
+#[turbo_tasks::value(transparent)]
+#[derive(Debug)]
+struct OptionConstantsModule(Option<ConstantsModule>);
 
-            Some(JsValue::frozen_object_missing_unknown(
-                exports
-                    .iter()
-                    .map(|(key, value)| {
-                        ObjectPart::KeyValue(
-                            JsValue::Constant(ConstantValue::Str(key.clone().into())),
-                            if let Some(value) = value {
-                                if !has_opt_in {
-                                    // when not having opt in, only inline short literals
-                                    match value {
-                                        ConstantValue::Str(s) if s.as_str().len() > 6 => {
-                                            JsValue::unknown_empty(false, "constant too long")
-                                        }
-                                        ConstantValue::Num(n) if n.0.abs() > 1_000_000.0 => {
-                                            JsValue::unknown_empty(false, "constant too long")
-                                        }
-                                        ConstantValue::BigInt(n)
-                                            if **n > BigInt::from(1_000_000)
-                                                || **n < BigInt::from(-1_000_000) =>
-                                        {
-                                            JsValue::unknown_empty(false, "constant too long")
-                                        }
-                                        ConstantValue::Regex(_) => {
-                                            // Regexes are literals, but they are also objects, so
-                                            // have identity and aren't inlined without opt in.
-                                            JsValue::unknown_empty(false, "regex not inlined")
-                                        }
-                                        _ => JsValue::Constant(value.clone()),
+impl ConstantsModule {
+    pub fn as_js_value(&self, has_turbopack_annotation: bool) -> JsValue {
+        let has_opt_in = self.has_directive || has_turbopack_annotation;
+
+        JsValue::frozen_object_missing_unknown(
+            self.exports
+                .iter()
+                .map(|(key, value)| {
+                    ObjectPart::KeyValue(
+                        JsValue::Constant(ConstantValue::Str(key.clone().into())),
+                        if let Some(value) = value {
+                            if !has_opt_in {
+                                // when not having opt in, only inline short literals
+                                match value {
+                                    ConstantValue::Str(s) if s.as_str().len() > 6 => {
+                                        JsValue::unknown_empty(false, "constant too long")
                                     }
-                                } else {
-                                    JsValue::Constant(value.clone())
+                                    ConstantValue::Num(n) if n.0.abs() > 1_000_000.0 => {
+                                        JsValue::unknown_empty(false, "constant too long")
+                                    }
+                                    ConstantValue::BigInt(n)
+                                        if **n > BigInt::from(1_000_000)
+                                            || **n < BigInt::from(-1_000_000) =>
+                                    {
+                                        JsValue::unknown_empty(false, "constant too long")
+                                    }
+                                    ConstantValue::Regex(_) => {
+                                        // Regexes are literals, but they are also objects, so
+                                        // have identity and aren't inlined without opt in.
+                                        JsValue::unknown_empty(false, "regex not inlined")
+                                    }
+                                    _ => JsValue::Constant(value.clone()),
                                 }
                             } else {
-                                JsValue::unknown_empty(false, "not a constant")
-                            },
-                        )
-                    })
-                    .collect(),
-            ))
-        } else {
-            None
-        }
+                                JsValue::Constant(value.clone())
+                            }
+                        } else {
+                            JsValue::unknown_empty(false, "not a constant")
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -154,7 +149,7 @@ impl ConstantsModule {
 pub async fn get_constants(
     source: ResolvedVc<Box<dyn Source>>,
     compile_time_info: Vc<CompileTimeInfo>,
-) -> Result<Vc<ConstantsModule>> {
+) -> Result<Vc<OptionConstantsModule>> {
     let path = source.ident().path().await?;
     let parsed = parse(
         *source,
@@ -185,7 +180,7 @@ pub async fn get_constants(
     } = &*parsed
     else {
         // The `parse` call has already emitted parse issues in case of `ParseResult::Unparsable`
-        return Ok(ConstantsModule::None.cell());
+        return Ok(Vc::cell(None));
     };
 
     let directives = parse_module_turbopack_directives(program);
@@ -258,11 +253,10 @@ pub async fn get_constants(
         .try_join()
         .await?;
 
-    Ok(ConstantsModule::Some {
+    Ok(Vc::cell(Some(ConstantsModule {
         exports,
         has_directive: directives.constants_module,
-    }
-    .cell())
+    })))
 }
 
 #[turbo_tasks::value]
