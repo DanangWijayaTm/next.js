@@ -110,7 +110,9 @@ impl ImportAnnotations {
                     }
                 }
                 "turbopackConstants" => {
-                    turbopack_constants = true;
+                    if let Some(Lit::Str(s)) = kv.value.as_lit() {
+                        turbopack_constants = s.value.to_string_lossy() == "true";
+                    }
                 }
                 _ => {
                     // For all other keys, only accept string values (per spec)
