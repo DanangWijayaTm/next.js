@@ -1475,7 +1475,6 @@ async fn analyze_ecmascript_module_internal(
                         .await?;
                 }
                 Effect::ImportedBinding {
-                    value,
                     esm_reference_index,
                     export,
                     ast_path,
@@ -1493,7 +1492,13 @@ async fn analyze_ecmascript_module_internal(
                             .get_annotations(esm_reference_index)
                             .is_some_and(|a| a.has_turbopack_constants()))
                         && let JsValue::Constant(c) = analysis_state
-                            .link_value(*value.clone(), ImportAttributes::empty_ref())
+                            .link_value(
+                                eval_context.imports.get_import_for_idx(
+                                    esm_reference_index,
+                                    export.clone().map(Into::into),
+                                ),
+                                ImportAttributes::empty_ref(),
+                            )
                             .await?
                     {
                         // This is a constant import, we can inline it directly without creating a

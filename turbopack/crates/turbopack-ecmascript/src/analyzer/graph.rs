@@ -180,7 +180,6 @@ pub enum Effect {
     },
     /// A reference to an imported binding.
     ImportedBinding {
-        value: Box<JsValue>,
         esm_reference_index: usize,
         export: Option<RcStr>,
         ast_path: Vec<AstParentKind>,
@@ -2634,15 +2633,10 @@ impl VisitAstPath for Analyzer<'_> {
                     export: Some(prop_str.into()),
                     // point to the MemberExpression instead
                     ast_path: as_parent_path_skip(ast_path, 1),
-                    value: Box::new(JsValue::member(
-                        Box::new(self.eval_context.eval_id(ident.to_id())),
-                        Box::new(prop),
-                    )),
                     span: member.span(),
                 });
             } else {
                 self.add_effect(Effect::ImportedBinding {
-                    value: Box::new(self.eval_context.eval_id(ident.to_id())),
                     esm_reference_index,
                     export,
                     ast_path: as_parent_path(ast_path),

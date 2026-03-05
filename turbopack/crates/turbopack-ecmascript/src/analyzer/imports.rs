@@ -20,7 +20,7 @@ use turbopack_core::{issue::IssueSource, loader::WebpackLoaderItem, source::Sour
 use super::{JsValue, ModuleValue, top_level_await::has_top_level_await};
 use crate::{
     SpecifiedModuleType,
-    analyzer::{ConstantValue, ObjectPart},
+    analyzer::{ConstantString, ConstantValue, ObjectPart},
     magic_identifier,
     references::cross_module_constants::is_import_name_eligible_for_exports,
     tree_shake::{PartId, find_turbopack_part_id_in_asserts},
@@ -390,25 +390,36 @@ impl ImportMap {
         }
     }
 
-    pub fn get_import(&self, id: &Id) -> Option<JsValue> {
-        if let Some((i, i_sym)) = self.imports.get(id) {
-            let r = &self.references[*i];
-            return Some(JsValue::member(
+    pub fn get_import_for_idx(
+        &self,
+        esm_reference_idx: usize,
+        export: Option<ConstantString>,
+    ) -> JsValue {
+        let r = &self.references[esm_reference_idx];
+        if let Some(export) = export {
+            JsValue::member(
                 Box::new(JsValue::Module(ModuleValue {
                     module: r.module_path.clone(),
                     annotations: r.annotations.clone(),
-                    analyze_for_constants: is_import_name_eligible_for_exports(i_sym),
+                    analyze_for_constants: is_import_name_eligible_for_exports(export.as_str()),
                 })),
-                Box::new(i_sym.clone().into()),
-            ));
-        }
-        if let Some(i) = self.namespace_imports.get(id) {
-            let r = &self.references[*i];
-            return Some(JsValue::Module(ModuleValue {
+                Box::new(JsValue::Constant(ConstantValue::Str(export))),
+            )
+        } else {
+            JsValue::Module(ModuleValue {
                 module: r.module_path.clone(),
                 annotations: r.annotations.clone(),
                 analyze_for_constants: false,
-            }));
+            })
+        }
+    }
+
+    pub fn get_import(&self, id: &Id) -> Option<JsValue> {
+        if let Some((i, i_sym)) = self.imports.get(id) {
+            return Some(self.get_import_for_idx(*i, Some(i_sym.clone().into())));
+        }
+        if let Some(i) = self.namespace_imports.get(id) {
+            return Some(self.get_import_for_idx(*i, None));
         }
         None
     }

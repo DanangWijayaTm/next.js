@@ -154,29 +154,6 @@
         span: 99..122,
     },
     ImportedBinding {
-        value: Member(
-            3,
-            Module(
-                ModuleValue {
-                    module: "node:module",
-                    annotations: ImportAnnotations {
-                        map: {},
-                        turbopack_loader: None,
-                        turbopack_rename_as: None,
-                        turbopack_module_type: None,
-                        turbopack_constants: false,
-                    },
-                    analyze_for_constants: false,
-                },
-            ),
-            Constant(
-                Str(
-                    Atom(
-                        "createRequire",
-                    ),
-                ),
-            ),
-        ),
         esm_reference_index: 1,
         export: Some(
             "createRequire",
