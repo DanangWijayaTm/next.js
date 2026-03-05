@@ -37,10 +37,11 @@ import {
   createNodeStreamFromChunks,
 } from './stream-utils'
 import { createDebugChannel } from '../debug-channel-server'
+import { renderToFlightStream } from '../stream-ops'
+import type { AnyStream, FlightComponentMod } from '../stream-ops'
+
 // eslint-disable-next-line import/no-extraneous-dependencies
 import { createFromNodeStream } from 'react-server-dom-webpack/client'
-// eslint-disable-next-line import/no-extraneous-dependencies
-import { renderToReadableStream } from 'react-server-dom-webpack/server'
 import {
   addSearchParamsIfPageSegment,
   isGroupSegment,
@@ -199,6 +200,7 @@ export type StageEndTimes = {
  * into separate staged streams (also in arrays-of-chunks form), one for each segment.
  * */
 export async function collectStagedSegmentData(
+  ComponentMod: FlightComponentMod,
   fullPageChunks: StageChunks,
   fullPageDebugChunks: Uint8Array[] | null,
   startTime: number,
@@ -286,7 +288,8 @@ export async function collectStagedSegmentData(
       ? createDebugChannel()
       : undefined
 
-    const itemStream = renderToReadableStream(
+    const itemStream: AnyStream = renderToFlightStream(
+      ComponentMod,
       data,
       clientReferenceManifest.clientModules,
       {
@@ -330,7 +333,7 @@ export async function collectStagedSegmentData(
     await Promise.all([
       // accumulate Flight chunks
       (async () => {
-        for await (const chunk of itemStream.values()) {
+        for await (const chunk of itemStream as AsyncIterable<Uint8Array>) {
           writeChunk(cacheEntry.chunks, controller.currentStage, chunk)
         }
       })(),
@@ -506,6 +509,7 @@ function writeChunk(
  * to provide extra debug info.
  * */
 export async function createCombinedPayloadStream(
+  ComponentMod: FlightComponentMod,
   payload: InitialRSCPayload,
   extraChunksAbortController: AbortController,
   renderSignal: AbortSignal,
@@ -526,7 +530,8 @@ export async function createCombinedPayloadStream(
 
   await runInSequentialTasks(
     () => {
-      const stream = renderToReadableStream(
+      const stream: AnyStream = renderToFlightStream(
+        ComponentMod,
         payload,
         clientReferenceManifest.clientModules,
         {
@@ -569,7 +574,7 @@ export async function createCombinedPayloadStream(
       streamFinished = Promise.all([
         // Accumulate Flight chunks
         (async () => {
-          for await (const chunk of stream.values()) {
+          for await (const chunk of stream as AsyncIterable<Uint8Array>) {
             allChunks.push(chunk)
             if (isRenderable) {
               renderableChunks.push(chunk)

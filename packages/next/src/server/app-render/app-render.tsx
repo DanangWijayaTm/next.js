@@ -4738,6 +4738,7 @@ async function validateInstantConfigs(
     payload: initialRscPayload,
     stageEndTimes,
   } = await collectStagedSegmentData(
+    ctx.componentMod,
     {
       [RenderStage.Static]: accumulatedChunks.staticChunks,
       [RenderStage.Runtime]: accumulatedChunks.runtimeChunks,
@@ -4813,6 +4814,7 @@ async function validateInstantConfigs(
 
     const { stream: serverStream, debugStream } =
       await createCombinedPayloadStream(
+        ctx.componentMod,
         payloadResult.payload,
         extraChunksController,
         reactController.signal,
