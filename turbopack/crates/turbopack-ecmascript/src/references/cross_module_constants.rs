@@ -249,7 +249,7 @@ pub async fn get_constants(
                             span.lo.to_u32(),
                             span.hi.to_u32(),
                         )),
-                        value: linked_value.0.explain(10, 5).0,
+                        value: linked_value.0.explain(10, 5),
                     }
                     .resolved_cell()
                     .emit();
@@ -271,7 +271,7 @@ struct NonConstantIssue {
     export: RcStr,
     file_path: FileSystemPath,
     source: Option<IssueSource>,
-    value: String,
+    value: (String, String),
 }
 
 #[turbo_tasks::value_impl]
@@ -303,9 +303,12 @@ impl Issue for NonConstantIssue {
     #[turbo_tasks::function]
     async fn description(&self) -> Result<Vc<OptionStyledString>> {
         Ok(Vc::cell(Some(
-            StyledString::Line(vec![
-                StyledString::Text(rcstr!("It was analyzed to be ")),
-                StyledString::Code(self.value.clone().into()),
+            StyledString::Stack(vec![
+                StyledString::Line(vec![
+                    StyledString::Text(rcstr!("It was analyzed to be ")),
+                    StyledString::Code(self.value.0.clone().into()),
+                ]),
+                StyledString::Line(vec![StyledString::Code(self.value.1.clone().into())]),
             ])
             .resolved_cell(),
         )))

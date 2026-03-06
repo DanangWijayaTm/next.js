@@ -15,6 +15,9 @@ error - [analysis] /turbopack/crates/turbopack-tests/tests/snapshot/comptime/cro
   It was analyzed to be FreeVar(globalThis)["foo"]
   
   
+  
+  
+  
   Import trace:
     test:
       ./turbopack/crates/turbopack-tests/tests/snapshot/comptime/cross-module-strict/input/other.js
