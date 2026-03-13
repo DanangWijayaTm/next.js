@@ -248,10 +248,8 @@ pub async fn primary_referenced_modules(module: Vc<Box<dyn Module>>) -> Result<V
         .map(|reference| async {
             reference
                 .resolve_reference()
-                .resolve()
                 .await?
-                .primary_modules()
-                .owned()
+                .primary_modules_ref()
                 .await
         })
         .try_join()

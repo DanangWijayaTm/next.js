@@ -86,9 +86,8 @@ pub async fn children_from_module_references(
 
         for &module in reference
             .resolve_reference()
-            .resolve()
             .await?
-            .primary_modules()
+            .primary_modules_ref()
             .await?
             .iter()
         {
@@ -99,8 +98,8 @@ pub async fn children_from_module_references(
         }
         for &output_asset in reference
             .resolve_reference()
-            .primary_output_assets()
             .await?
+            .primary_output_assets()
             .iter()
         {
             children.insert((

@@ -603,7 +603,7 @@ impl EvaluateContext for WebpackLoaderContext {
                     options,
                 );
 
-                if let Some(source) = *resolved.first_source().await? {
+                if let Some(source) = resolved.await?.first_source() {
                     if let Some(path) = self
                         .cwd
                         .get_relative_path_to(&*source.ident().path().await?)

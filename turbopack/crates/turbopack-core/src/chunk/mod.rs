@@ -113,17 +113,6 @@ pub trait ChunkableModule: Module {
     ) -> Vc<Box<dyn ChunkItem>>;
 }
 
-#[turbo_tasks::value(transparent)]
-pub struct ChunkableModules(Vec<ResolvedVc<Box<dyn ChunkableModule>>>);
-
-#[turbo_tasks::value_impl]
-impl ChunkableModules {
-    #[turbo_tasks::function]
-    pub fn interned(modules: Vec<ResolvedVc<Box<dyn ChunkableModule>>>) -> Vc<Self> {
-        Vc::cell(modules)
-    }
-}
-
 /// A [Module] that can be merged with other [Module]s (to perform scope hoisting)
 // TODO currently this is only used for ecmascript modules, and with the current API cannot be used
 // with other module types (as a MergeableModule cannot prevent itself from being merged with other
@@ -428,16 +417,14 @@ pub trait ChunkItem: OutputAssetsReference {
     }
 
     /// The type of chunk this item should be assembled into.
-    #[turbo_tasks::function]
-    fn ty(self: Vc<Self>) -> Vc<Box<dyn ChunkType>>;
+    fn ty(&self) -> Vc<Box<dyn ChunkType>>;
 
     /// A temporary method to retrieve the module associated with this
     /// ChunkItem. TODO: Remove this as part of the chunk refactoring.
     #[turbo_tasks::function]
     fn module(self: Vc<Self>) -> Vc<Box<dyn Module>>;
 
-    #[turbo_tasks::function]
-    fn chunking_context(self: Vc<Self>) -> Vc<Box<dyn ChunkingContext>>;
+    fn chunking_context(&self) -> Vc<Box<dyn ChunkingContext>>;
 }
 
 #[turbo_tasks::value_trait]
@@ -510,6 +497,8 @@ where
     async fn id(self: Vc<Self>) -> Result<ModuleId> {
         let chunk_item = Vc::upcast_non_strict(self);
         chunk_item
+            .into_trait_ref()
+            .await?
             .chunking_context()
             .chunk_item_id_strategy()
             .await?

@@ -861,7 +861,6 @@ impl AppProject {
             None,
             ResolveErrorMode::Error,
         )
-        .resolve()
         .await?
         .first_module()
         .await?

@@ -282,9 +282,10 @@ impl EcmascriptChunkPlaceable for EcmascriptCssModule {
                         original: original_name,
                         from,
                     } => {
-                        let resolved_module = from.resolve_reference().first_module().await?;
+                        let resolved_module =
+                            from.resolve_reference().await?.first_module().await?;
 
-                        let Some(resolved_module) = &*resolved_module else {
+                        let Some(resolved_module) = resolved_module else {
                             CssModuleComposesIssue {
                                 severity: IssueSeverity::Error,
                                 // TODO(PACK-4879): this should include detailed location
@@ -303,7 +304,7 @@ impl EcmascriptChunkPlaceable for EcmascriptCssModule {
                         };
 
                         let Some(css_module) =
-                            ResolvedVc::try_downcast_type::<EcmascriptCssModule>(*resolved_module)
+                            ResolvedVc::try_downcast_type::<EcmascriptCssModule>(resolved_module)
                         else {
                             CssModuleComposesIssue {
                                 severity: IssueSeverity::Error,

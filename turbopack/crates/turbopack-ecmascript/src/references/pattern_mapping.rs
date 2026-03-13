@@ -329,6 +329,7 @@ async fn to_single_pattern_mapping(
                 issue.title().await?.to_unstyled_string(),
             ));
         }
+        ModuleResolveResultItem::Duplicate(_) => return Ok(SinglePatternMapping::Invalid),
         ModuleResolveResultItem::OutputAsset(_)
         | ModuleResolveResultItem::Empty
         | ModuleResolveResultItem::Custom(_) => {

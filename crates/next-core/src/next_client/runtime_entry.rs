@@ -40,9 +40,8 @@ impl RuntimeEntry {
             None,
             ResolveErrorMode::Error,
         )
-        .resolve()
         .await?
-        .primary_modules()
+        .primary_modules_ref()
         .await?;
 
         let mut runtime_entries = Vec::with_capacity(modules.len());
