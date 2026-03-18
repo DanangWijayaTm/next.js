@@ -607,7 +607,8 @@ impl ProjectContainer {
                 container.connect().project()
             }
             let project = project_from_container_operation(this_op)
-                .resolve_strongly_consistent()
+                .resolve()
+                .strongly_consistent()
                 .await?;
             let project_fs = project_fs_operation(project)
                 .read_strongly_consistent()
@@ -726,7 +727,8 @@ impl ProjectContainer {
             let watch = new_options.watch;
 
             let project = project_operation(self)
-                .resolve_strongly_consistent()
+                .resolve()
+                .strongly_consistent()
                 .await?;
             let prev_project_fs = project_fs_operation(project)
                 .read_strongly_consistent()
@@ -744,7 +746,8 @@ impl ProjectContainer {
             }
             this.options_state.set(Some(new_options));
             let project = project_operation(self)
-                .resolve_strongly_consistent()
+                .resolve()
+                .strongly_consistent()
                 .await?;
             let project_fs = project_fs_operation(project)
                 .read_strongly_consistent()
@@ -1488,7 +1491,7 @@ impl Project {
         } else {
             // In development mode, we need to to take and drop the issues, otherwise every
             // route will report all issues.
-            let vc = module_graphs_op.resolve_strongly_consistent().await?;
+            let vc = module_graphs_op.resolve().strongly_consistent().await?;
             module_graphs_op.drop_issues();
             *vc
         };
