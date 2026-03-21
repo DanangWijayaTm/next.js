@@ -1374,7 +1374,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
 
         // Evict tasks from in-memory storage after successful persistence.
         // At this point end_snapshot() has already been called (via SnapshotGuard::drop
-        // inside save_snapshot), so modified flags are in a stable state.
+        // inside save_snapshot), so modified flags on tasks are once again the source of truth
         if self.should_evict() {
             let _span =
                 tracing::info_span!(parent: parent_span, "evict", reason = reason).entered();
