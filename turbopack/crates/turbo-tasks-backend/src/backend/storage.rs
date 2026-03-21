@@ -11,7 +11,7 @@ use turbo_bincode::TurboBincodeBuffer;
 use turbo_tasks::{FxDashMap, TaskId, parallel};
 
 use crate::{
-    backend::storage_schema::TaskStorage,
+    backend::storage_schema::{Evictability, TaskStorage},
     backing_storage::SnapshotItem,
     database::key_value_database::KeySpace,
     utils::{
@@ -286,6 +286,43 @@ impl Storage {
     pub fn drop_contents(&self) {
         drop_contents(&self.map);
         drop_contents(&self.modified);
+    }
+
+    /// Evict tasks from in-memory storage after a successful snapshot.
+    ///
+    /// Iterates all tasks and:
+    /// - Fully evictable tasks are removed from the map entirely
+    /// - Data-only evictable tasks have their data category fields cleared
+    ///
+    /// Must be called when NOT in snapshot mode (i.e., after `end_snapshot()`).
+    pub fn evict_after_snapshot(&self) {
+        debug_assert!(
+            !self.snapshot_mode(),
+            "evict_after_snapshot must not be called during snapshot mode"
+        );
+
+        parallel::for_each(self.map.shards(), |shard| {
+            let mut shard = shard.write();
+            // SAFETY: We hold the write lock for the duration of iteration. Buckets are only
+            // erased via `erase` which is safe while iterating a RawTable.
+            unsafe {
+                for bucket in shard.iter() {
+                    let (task_id, task) = bucket.as_mut();
+                    if task_id.is_transient() {
+                        continue;
+                    }
+                    match task.get_mut().evictability() {
+                        Evictability::Full => {
+                            shard.erase(bucket);
+                        }
+                        Evictability::DataOnly => {
+                            task.get_mut().drop_data();
+                        }
+                        Evictability::No => {}
+                    }
+                }
+            }
+        });
     }
 }
 

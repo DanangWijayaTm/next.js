@@ -69,6 +69,10 @@ struct FieldInfo {
     /// If true, drop this field entirely after execution completes if the task is immutable.
     /// Immutable tasks don't re-execute, so dependency tracking fields are not needed.
     drop_on_completion_if_immutable: bool,
+    /// If true, skip overwriting this field during restore if it already has a value.
+    /// Used for fields like `persistent_task_type` that may be set from a shared Arc
+    /// before restore runs, to avoid allocating a duplicate.
+    keep_on_restore: bool,
 }
 
 impl FieldInfo {
@@ -363,6 +367,7 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
     let mut use_default = false;
     let mut shrink_on_completion = false;
     let mut drop_on_completion_if_immutable = false;
+    let mut keep_on_restore = false;
 
     // Find and parse the field attribute
     if let Some(attr) = field.attrs.iter().find(|attr| {
@@ -466,13 +471,15 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
                         shrink_on_completion = true;
                     } else if ident == "drop_on_completion_if_immutable" {
                         drop_on_completion_if_immutable = true;
+                    } else if ident == "keep_on_restore" {
+                        keep_on_restore = true;
                     } else {
                         meta.span()
                             .unwrap()
                             .error(format!(
                                 "unknown modifier `{ident}`, expected `inline`, \
-                                 `filter_transient`, `default`, `shrink_on_completion`, or \
-                                 `drop_on_completion_if_immutable`"
+                                 `filter_transient`, `default`, `shrink_on_completion`, \
+                                 `drop_on_completion_if_immutable`, or `keep_on_restore`"
                             ))
                             .emit();
                     }
@@ -549,6 +556,7 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
         use_default,
         shrink_on_completion,
         drop_on_completion_if_immutable,
+        keep_on_restore,
     }
 }
 
@@ -663,12 +671,27 @@ fn gen_clone_inline_fields<'a>(fields: impl Iterator<Item = &'a FieldInfo>) -> V
 }
 
 /// Generate inline field restore assignments: `self.field = source.field;`
+///
+/// For fields with `keep_on_restore`, generates a conditional assignment that only
+/// overwrites if the target field is currently at its default/None value.
 fn gen_restore_inline_fields<'a>(fields: impl Iterator<Item = &'a FieldInfo>) -> Vec<TokenStream> {
     fields
         .map(|field| {
             let field_name = &field.field_name;
-            quote! {
-                self.#field_name = source.#field_name;
+            if field.keep_on_restore {
+                // Only overwrite if the field is currently None/default.
+                // This preserves values set before restore (e.g., shared Arcs from task_cache).
+                quote! {
+                    if self.#field_name.is_none() {
+                        self.#field_name = source.#field_name;
+                    } else {
+                        debug_assert_eq!(self.#field_name, source.#field_name, "restored data is not identical already stored data for #field_name");
+                    }
+                }
+            } else {
+                quote! {
+                    self.#field_name = source.#field_name;
+                }
             }
         })
         .collect()
@@ -719,6 +742,9 @@ fn generate_task_storage_impl(_ident: &Ident, grouped_fields: &GroupedFields) ->
     // Generate snapshot clone and restore methods
     let snapshot_restore_methods = generate_snapshot_restore_methods(grouped_fields);
 
+    // Generate eviction methods
+    let eviction_methods = generate_eviction_methods(grouped_fields);
+
     quote! {
         // Import ShrinkToFit trait for the derive macro generated code
         use turbo_tasks::ShrinkToFit as _;
@@ -740,6 +766,9 @@ fn generate_task_storage_impl(_ident: &Ident, grouped_fields: &GroupedFields) ->
 
         // Generated snapshot clone and restore methods
         #snapshot_restore_methods
+
+        // Generated eviction methods
+        #eviction_methods
 
         // Generated TaskStorageAccessors trait
         #accessors_trait
@@ -2570,6 +2599,106 @@ fn generate_cleanup_after_execution(grouped_fields: &GroupedFields) -> TokenStre
             }
 
             typed.lazy.shrink_to_fit();
+        }
+    }
+}
+
+/// Generate eviction methods for TaskStorage.
+///
+/// Generates:
+/// - `Evictability` enum (No, DataOnly, Full)
+/// - `evictability(&self) -> Evictability` - checks flags to determine eviction level
+/// - `drop_data(&mut self)` - clears data category persistent fields for data-only eviction
+fn generate_eviction_methods(grouped_fields: &GroupedFields) -> TokenStream {
+    // Generate default assignments for data-category inline fields
+    let mut drop_data_inline = Vec::new();
+    for field in grouped_fields.persistent_inline(Category::Data) {
+        let field_name = &field.field_name;
+        // Skip persistent_task_type — needed for task_cache mappings
+        if field_name == "persistent_task_type" {
+            continue;
+        }
+        drop_data_inline.push(quote! {
+            self.#field_name = Default::default();
+        });
+    }
+
+    quote! {
+        /// Eviction level for a task after a snapshot.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Evictability {
+            /// Task cannot be evicted.
+            No,
+            /// Only the data category can be evicted (meta is still in use).
+            DataOnly,
+            /// The entire task can be evicted (removed from the storage map).
+            Full,
+        }
+
+        #[automatically_derived]
+        impl TaskStorage {
+            /// Determine the evictability level of this task based on its flags.
+            ///
+            /// This checks only the flags on the TaskStorage itself. The caller
+            /// must additionally check that the task is not transient (via TaskId).
+            ///
+            /// Returns:
+            /// - `Full` if both meta and data are restored, neither is modified,
+            ///   and the task has no transient state (in_progress, activeness,
+            ///   transient_task_type).
+            /// - `DataOnly` if data is restored and not modified (regardless of meta state).
+            /// - `No` otherwise.
+            pub fn evictability(&self) -> Evictability {
+                let flags = &self.flags;
+
+                // Check for transient state that prevents any eviction
+                if self.get_in_progress().is_some()
+                    || self.get_activeness().is_some()
+                    || self.get_transient_task_type().is_some()
+                {
+                    return Evictability::No;
+                }
+
+                // Check if full eviction is possible
+                let meta_evictable = flags.meta_restored()
+                    && !flags.meta_modified()
+                    && !flags.meta_modified_during_snapshot();
+                let data_evictable = flags.data_restored()
+                    && !flags.data_modified()
+                    && !flags.data_modified_during_snapshot();
+
+                if meta_evictable && data_evictable {
+                    return Evictability::Full;
+                }
+
+                if data_evictable {
+                    return Evictability::DataOnly;
+                }
+
+                Evictability::No
+            }
+
+            /// Drop all persistent data-category fields, resetting them to defaults.
+            ///
+            /// This is used for data-only eviction: the data can be re-loaded from
+            /// the backing storage on next access. Meta fields and transient fields
+            /// are preserved.
+            ///
+            /// After calling this, `data_restored` and `prefetched` flags are cleared
+            /// so the next access triggers a restore from the backing storage.
+            pub fn drop_data(&mut self) {
+                // Reset data-category inline fields to defaults
+                // (persistent_task_type is intentionally preserved)
+                #(#drop_data_inline)*
+
+                // Remove all persistent data-category lazy fields
+                self.lazy.retain(|f| !(f.is_persistent() && f.is_data()));
+                self.lazy.shrink_to_fit();
+
+                // Clear flags so next access triggers restore
+                self.flags.set_data_restored(false);
+                self.flags.set_prefetched(false);
+            }
         }
     }
 }

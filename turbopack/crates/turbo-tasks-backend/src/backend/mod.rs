@@ -112,6 +112,7 @@ impl SnapshotRequest {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum StorageMode {
     /// Queries the storage for cache entries that don't exist locally.
     ReadOnly,
@@ -123,6 +124,7 @@ pub enum StorageMode {
     ReadWriteOnShutdown,
 }
 
+#[derive(Copy, Clone)]
 pub struct BackendOptions {
     /// Enables dependency tracking.
     ///
@@ -146,6 +148,11 @@ pub struct BackendOptions {
 
     /// Avoid big preallocations for faster startup. Should only be used for testing purposes.
     pub small_preallocation: bool,
+
+    /// When enabled, evict all evictable tasks from in-memory storage after every snapshot.
+    /// This reclaims memory by clearing persisted data that can be re-loaded from disk on demand.
+    /// This is an EXPERIMENTAL FEATURE under development
+    pub evict_after_snapshot: bool,
 }
 
 impl Default for BackendOptions {
@@ -156,6 +163,7 @@ impl Default for BackendOptions {
             storage_mode: Some(StorageMode::ReadWrite),
             num_workers: None,
             small_preallocation: false,
+            evict_after_snapshot: false,
         }
     }
 }
@@ -243,6 +251,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             options.active_tracking = false;
         }
         let small_preallocation = options.small_preallocation;
+        let evict_after_snapshot = options.evict_after_snapshot;
         let next_task_id = backing_storage
             .next_free_task_id()
             .expect("Failed to get task id");
@@ -259,7 +268,12 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             ),
             persisted_task_cache_log: need_log.then(|| Sharded::new(shard_amount)),
             task_cache: FxDashMap::default(),
-            local_is_partial: next_task_id != TaskId::MIN,
+            // if we are starting with a warm cache or eviction is enabled, we always need to check
+            // the disk for cached items.
+            // TODO: we could optimize this slightly by only setting local_is_partial after the
+            // first evictions occur.  But it is also likely that reading from an empty database is
+            // incredibly fast.
+            local_is_partial: next_task_id != TaskId::MIN || evict_after_snapshot,
             storage: Storage::new(shard_amount, small_preallocation),
             in_progress_operations: AtomicUsize::new(0),
             snapshot_request: Mutex::new(SnapshotRequest::new()),
@@ -353,6 +367,10 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             self.options.storage_mode,
             Some(StorageMode::ReadWrite) | Some(StorageMode::ReadWriteOnShutdown)
         )
+    }
+
+    fn should_evict(&self) -> bool {
+        self.options.evict_after_snapshot && self.should_persist()
     }
 
     fn should_restore(&self) -> bool {
@@ -1352,6 +1370,13 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                 ("task_count", serde_json::Value::from(task_count)),
             ],
         )));
+
+        // Evict tasks from in-memory storage after successful persistence.
+        // At this point end_snapshot() has already been called (via SnapshotGuard::drop
+        // inside save_snapshot), so modified flags are in a stable state.
+        if self.should_evict() {
+            self.storage.evict_after_snapshot();
+        }
 
         Some((snapshot_time, true))
     }
