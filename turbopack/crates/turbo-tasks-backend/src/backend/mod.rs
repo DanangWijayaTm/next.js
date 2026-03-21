@@ -1216,7 +1216,8 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
         }
 
         let persist_start = Instant::now();
-        let _span = tracing::info_span!(parent: parent_span, "persist", reason = reason).entered();
+        let _span =
+            tracing::info_span!(parent: parent_span.clone(), "persist", reason = reason).entered();
         {
             if let Err(err) = self.backing_storage.save_snapshot(
                 suspended_operations,
@@ -1375,6 +1376,8 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
         // At this point end_snapshot() has already been called (via SnapshotGuard::drop
         // inside save_snapshot), so modified flags are in a stable state.
         if self.should_evict() {
+            let _span =
+                tracing::info_span!(parent: parent_span, "evict", reason = reason).entered();
             self.storage.evict_after_snapshot();
         }
 

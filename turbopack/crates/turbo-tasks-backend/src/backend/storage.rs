@@ -303,23 +303,22 @@ impl Storage {
 
         parallel::for_each(self.map.shards(), |shard| {
             let mut shard = shard.write();
-            // SAFETY: We hold the write lock for the duration of iteration. Buckets are only
-            // erased via `erase` which is safe while iterating a RawTable.
-            unsafe {
-                for bucket in shard.iter() {
-                    let (task_id, task) = bucket.as_mut();
-                    if task_id.is_transient() {
-                        continue;
+            // SAFETY: We hold the write lock for the duration of iteration.
+            for bucket in unsafe { shard.iter() } {
+                // SAFETY: The write lock guard outlives the bucket reference.
+                let (task_id, task) = unsafe { bucket.as_mut() };
+                if task_id.is_transient() {
+                    continue;
+                }
+                match task.get_mut().evictability() {
+                    Evictability::Full => {
+                        // SAFETY: Erasing while iterating a RawTable is safe.
+                        unsafe { shard.erase(bucket) };
                     }
-                    match task.get_mut().evictability() {
-                        Evictability::Full => {
-                            shard.erase(bucket);
-                        }
-                        Evictability::DataOnly => {
-                            task.get_mut().drop_data();
-                        }
-                        Evictability::No => {}
+                    Evictability::DataOnly => {
+                        task.get_mut().drop_data();
                     }
+                    Evictability::No => {}
                 }
             }
         });
