@@ -233,17 +233,60 @@ impl<T: KeyValueDatabase + Send + Sync + 'static> BackingStorageSealed
     where
         I: IntoIterator<Item = SnapshotItem> + Send + Sync,
     {
-        let _span = tracing::info_span!("save snapshot", operations = operations.len()).entered();
+        let task_cache_count: usize = task_cache_updates.iter().map(|m| m.len()).sum();
+        let span = tracing::info_span!(
+            "save snapshot",
+            operations = operations.len(),
+            task_cache = task_cache_count,
+            meta = tracing::field::Empty,
+            data = tracing::field::Empty,
+        );
+        let _span = span.enter();
         let batch = self.inner.database.write_batch()?;
 
         {
             let _span = tracing::trace_span!("update task data").entered();
-            process_task_data(snapshots, &batch)?;
-            let span = tracing::trace_span!("flush task data").entered();
+            let counts: (usize, usize) =
+                parallel::map_collect_owned::<_, _, Result<Vec<_>>>(snapshots, |tasks| {
+                    let mut local_meta = 0usize;
+                    let mut local_data = 0usize;
+                    for SnapshotItem {
+                        task_id,
+                        meta,
+                        data,
+                    } in tasks
+                    {
+                        let key = IntKey::new(*task_id);
+                        let key = key.as_ref();
+                        if let Some(meta) = meta {
+                            batch.put(
+                                KeySpace::TaskMeta,
+                                WriteBuffer::Borrowed(key),
+                                WriteBuffer::SmallVec(meta),
+                            )?;
+                            local_meta += 1;
+                        }
+                        if let Some(data) = data {
+                            batch.put(
+                                KeySpace::TaskData,
+                                WriteBuffer::Borrowed(key),
+                                WriteBuffer::SmallVec(data),
+                            )?;
+                            local_data += 1;
+                        }
+                    }
+                    Ok((local_meta, local_data))
+                })?
+                .into_iter()
+                .fold((0, 0), |(am, ad), (m, d)| (am + m, ad + d));
+
+            span.record("meta", counts.0);
+            span.record("data", counts.1);
+            let flush_span = tracing::trace_span!("flush task data").entered();
             parallel::try_for_each(&[KeySpace::TaskMeta, KeySpace::TaskData], |&key_space| {
-                let _span = span.clone().entered();
-                // Safety: `process_task_data` has returned, so no concurrent `put` or
-                // `delete` on `TaskMeta`/`TaskData` key spaces are in-flight. The
+                let _span = flush_span.clone().entered();
+                // Safety: `parallel::try_for_each_owned` above has returned, so no concurrent
+                // `put` or `delete` on `TaskMeta`/`TaskData` key spaces are in-flight. The
                 // `parallel::try_for_each` below flushes disjoint key spaces, so
                 // concurrent flushes on different key spaces are safe.
                 unsafe { batch.flush(key_space) }
@@ -253,11 +296,8 @@ impl<T: KeyValueDatabase + Send + Sync + 'static> BackingStorageSealed
         let mut next_task_id = get_next_free_task_id(&batch)?;
 
         {
-            let _span = tracing::trace_span!(
-                "update task cache",
-                items = task_cache_updates.iter().map(|m| m.len()).sum::<usize>()
-            )
-            .entered();
+            let _span =
+                tracing::trace_span!("update task cache", items = task_cache_count).entered();
             let max_task_id = parallel::map_collect_owned::<_, _, Result<Vec<_>>>(
                 task_cache_updates,
                 |updates| {
@@ -446,40 +486,6 @@ fn compute_task_type_hash(task_type: &CachedTaskType) -> u64 {
     hash
 }
 
-fn process_task_data<'a, B: ConcurrentWriteBatch<'a> + Send + Sync, I>(
-    tasks: Vec<I>,
-    batch: &B,
-) -> Result<()>
-where
-    I: IntoIterator<Item = SnapshotItem> + Send + Sync,
-{
-    parallel::try_for_each_owned(tasks, |tasks| {
-        for SnapshotItem {
-            task_id,
-            meta,
-            data,
-        } in tasks
-        {
-            let key = IntKey::new(*task_id);
-            let key = key.as_ref();
-            if let Some(meta) = meta {
-                batch.put(
-                    KeySpace::TaskMeta,
-                    WriteBuffer::Borrowed(key),
-                    WriteBuffer::SmallVec(meta),
-                )?;
-            }
-            if let Some(data) = data {
-                batch.put(
-                    KeySpace::TaskData,
-                    WriteBuffer::Borrowed(key),
-                    WriteBuffer::SmallVec(data),
-                )?;
-            }
-        }
-        Ok(())
-    })
-}
 #[cfg(test)]
 mod tests {
     use std::borrow::Borrow;
