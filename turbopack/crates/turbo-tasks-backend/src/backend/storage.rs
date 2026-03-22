@@ -294,15 +294,19 @@ impl Storage {
     /// - Fully evictable tasks are removed from the map entirely
     /// - Data-only evictable tasks have their data category fields cleared
     ///
+    /// Returns `(full_evicted, data_only_evicted)` counts.
+    ///
     /// Must be called when NOT in snapshot mode (i.e., after `end_snapshot()`).
-    pub fn evict_after_snapshot(&self) {
+    pub fn evict_after_snapshot(&self) -> (usize, usize) {
         debug_assert!(
             !self.snapshot_mode(),
             "evict_after_snapshot must not be called during snapshot mode"
         );
 
-        parallel::for_each(self.map.shards(), |shard| {
+        let counts: Vec<(usize, usize)> = parallel::map_collect(self.map.shards(), |shard| {
             let mut shard = shard.write();
+            let mut full = 0usize;
+            let mut data_only = 0usize;
             // SAFETY: We hold the write lock for the duration of iteration.
             for bucket in unsafe { shard.iter() } {
                 // SAFETY: The write lock guard outlives the bucket reference.
@@ -310,18 +314,24 @@ impl Storage {
                 if task_id.is_transient() {
                     continue;
                 }
-                match task.get_mut().evictability() {
+                match task.get().evictability() {
                     Evictability::Full => {
                         // SAFETY: Erasing while iterating a RawTable is safe.
                         unsafe { shard.erase(bucket) };
+                        full += 1;
                     }
                     Evictability::DataOnly => {
                         task.get_mut().drop_data();
+                        data_only += 1;
                     }
                     Evictability::No => {}
                 }
             }
+            (full, data_only)
         });
+        counts
+            .into_iter()
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
     }
 }
 

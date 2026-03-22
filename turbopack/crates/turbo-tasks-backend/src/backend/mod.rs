@@ -112,7 +112,6 @@ impl SnapshotRequest {
     }
 }
 
-#[derive(Copy, Clone)]
 pub enum StorageMode {
     /// Queries the storage for cache entries that don't exist locally.
     ReadOnly,
@@ -124,7 +123,6 @@ pub enum StorageMode {
     ReadWriteOnShutdown,
 }
 
-#[derive(Copy, Clone)]
 pub struct BackendOptions {
     /// Enables dependency tracking.
     ///
@@ -1216,8 +1214,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
         }
 
         let persist_start = Instant::now();
-        let _span =
-            tracing::info_span!(parent: parent_span.clone(), "persist", reason = reason).entered();
+        let _span = tracing::info_span!(parent: parent_span, "persist", reason = reason).entered();
         {
             if let Err(err) = self.backing_storage.save_snapshot(
                 suspended_operations,
@@ -1371,15 +1368,6 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                 ("task_count", serde_json::Value::from(task_count)),
             ],
         )));
-
-        // Evict tasks from in-memory storage after successful persistence.
-        // At this point end_snapshot() has already been called (via SnapshotGuard::drop
-        // inside save_snapshot), so modified flags on tasks are once again the source of truth
-        if self.should_evict() {
-            let _span =
-                tracing::info_span!(parent: parent_span, "evict", reason = reason).entered();
-            self.storage.evict_after_snapshot();
-        }
 
         Some((snapshot_time, true))
     }
@@ -2806,6 +2794,22 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                             this.snapshot_and_persist(background_span.id(), reason, turbo_tasks);
                         if let Some((snapshot_start, new_data)) = snapshot {
                             last_snapshot = snapshot_start;
+
+                            // Evict persisted tasks from memory to reclaim space.
+                            // Like compaction, this runs after snapshot_and_persist
+                            // as a separate concern.
+                            if this.should_evict() {
+                                let evict_span = tracing::info_span!(
+                                    parent: background_span.id(),
+                                    "evict tasks",
+                                    full = tracing::field::Empty,
+                                    data_only = tracing::field::Empty,
+                                );
+                                let _guard = evict_span.enter();
+                                let (full, data_only) = this.storage.evict_after_snapshot();
+                                evict_span.record("full", full);
+                                evict_span.record("data_only", data_only);
+                            }
 
                             // Compact while idle (up to limit), regardless of
                             // whether the snapshot had new data.

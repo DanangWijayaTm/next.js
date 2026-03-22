@@ -381,6 +381,75 @@ impl TaskFlags {
 }
 
 // =============================================================================
+// Eviction
+// =============================================================================
+
+/// Eviction level for a task after a snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evictability {
+    /// Task cannot be evicted.
+    No,
+    /// Only the data category can be evicted (meta is still in use).
+    DataOnly,
+    /// The entire task can be evicted (removed from the storage map).
+    Full,
+}
+
+impl TaskStorage {
+    /// Determine the evictability level of this task based on its flags.
+    ///
+    /// This checks only the flags on the TaskStorage itself. The caller
+    /// must additionally check that the task is not transient (via TaskId).
+    ///
+    /// Returns:
+    /// - `Full` if both meta and data are restored, neither is modified, and the task has no
+    ///   transient state (in_progress, activeness, transient_task_type).
+    /// - `DataOnly` if data is restored and not modified (regardless of meta state).
+    /// - `No` otherwise.
+    ///
+    /// # Aggregation graph note
+    ///
+    /// Fully evicted tasks are removed from the storage map but can be transparently
+    /// re-created and restored from backing storage on next access (via
+    /// `Storage::access_mut`). The aggregation graph fields (`upper`, `followers`,
+    /// `children`, `aggregation_number`, etc.) are all in the **meta** category and
+    /// will be restored from disk. This means eviction is **correct** — graph
+    /// traversals will trigger restore — but may cause **thrashing** for frequently
+    /// accessed aggregation nodes that get evicted and immediately re-restored on
+    /// every snapshot cycle. Future work (LRU, read_epoch, memory pressure gating)
+    /// will mitigate this.
+    pub fn evictability(&self) -> Evictability {
+        let flags = &self.flags;
+
+        // Check for transient state that prevents any eviction
+        if self.get_in_progress().is_some()
+            || self.get_activeness().is_some()
+            || self.get_transient_task_type().is_some()
+        {
+            return Evictability::No;
+        }
+
+        // Check if full eviction is possible
+        let meta_evictable = flags.meta_restored()
+            && !flags.meta_modified()
+            && !flags.meta_modified_during_snapshot();
+        let data_evictable = flags.data_restored()
+            && !flags.data_modified()
+            && !flags.data_modified_during_snapshot();
+
+        if meta_evictable && data_evictable {
+            return Evictability::Full;
+        }
+
+        if data_evictable {
+            return Evictability::DataOnly;
+        }
+
+        Evictability::No
+    }
+}
+
+// =============================================================================
 // TaskStorage helper methods
 // =============================================================================
 
