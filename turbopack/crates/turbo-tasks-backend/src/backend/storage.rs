@@ -5,13 +5,14 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use thread_local::ThreadLocal;
 use turbo_bincode::TurboBincodeBuffer;
 use turbo_tasks::{FxDashMap, TaskId, parallel};
 
 use crate::{
-    backend::storage_schema::{Evictability, TaskStorage},
+    backend::storage_schema::{Evictability, TaskStorage, UnevictableReason},
     backing_storage::SnapshotItem,
     database::key_value_database::KeySpace,
     utils::{
@@ -307,35 +308,50 @@ impl Storage {
             "evict_after_snapshot must not be called during snapshot mode"
         );
 
-        let counts: Vec<(usize, usize)> = parallel::map_collect(self.map.shards(), |shard| {
-            let mut shard = shard.write();
-            let mut full = 0usize;
-            let mut data_only = 0usize;
-            // SAFETY: We hold the write lock for the duration of iteration.
-            for bucket in unsafe { shard.iter() } {
-                // SAFETY: The write lock guard outlives the bucket reference.
-                let (task_id, task) = unsafe { bucket.as_mut() };
-                if task_id.is_transient() {
-                    continue;
-                }
-                match task.get().evictability() {
-                    Evictability::Full => {
-                        // SAFETY: Erasing while iterating a RawTable is safe.
-                        unsafe { shard.erase(bucket) };
-                        full += 1;
+        let counts: Vec<(usize, usize, FxHashMap<UnevictableReason, usize>)> =
+            parallel::map_collect(self.map.shards(), |shard| {
+                let mut shard = shard.write();
+                let mut full = 0usize;
+                let mut data_only = 0usize;
+                let mut reason_counts: FxHashMap<UnevictableReason, usize> = FxHashMap::default();
+                // SAFETY: We hold the write lock for the duration of iteration.
+                for bucket in unsafe { shard.iter() } {
+                    // SAFETY: The write lock guard outlives the bucket reference.
+                    let (task_id, task) = unsafe { bucket.as_mut() };
+                    if task_id.is_transient() {
+                        continue;
                     }
-                    Evictability::DataOnly => {
-                        task.get_mut().drop_data();
-                        data_only += 1;
+                    match task.get().evictability() {
+                        Evictability::Full => {
+                            unsafe {
+                                shard.erase(bucket);
+                            }
+                            full += 1;
+                        }
+                        Evictability::DataOnly => {
+                            task.get_mut().drop_data();
+                            data_only += 1;
+                        }
+                        Evictability::No(reason) => {
+                            *reason_counts.entry(reason).or_default() += 1;
+                        }
                     }
-                    Evictability::No => {}
                 }
+                (full, data_only, reason_counts)
+            });
+        let mut full = 0usize;
+        let mut data_only = 0usize;
+        let mut reasons: FxHashMap<UnevictableReason, usize> = FxHashMap::default();
+        for (f, d, r) in counts {
+            full += f;
+            data_only += d;
+            for (reason, count) in r {
+                *reasons.entry(reason).or_default() += count;
             }
-            (full, data_only)
-        });
-        counts
-            .into_iter()
-            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
+        }
+        let skipped: usize = reasons.values().sum();
+        eprintln!("eviction: {full} full, {data_only} data-only, {skipped} skipped ({reasons:?})",);
+        (full, data_only)
     }
 }
 

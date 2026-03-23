@@ -29,7 +29,7 @@ use turbo_tasks::{
 };
 
 use crate::{
-    backend::counter_map::CounterMap,
+    backend::{counter_map::CounterMap, operation::LEAF_NUMBER},
     data::{
         ActivenessState, AggregationNumber, CellRef, CollectibleRef, CollectiblesRef, Dirtyness,
         InProgressCellState, InProgressState, LeafDistance, OutputValue, RootType, TransientTask,
@@ -384,11 +384,21 @@ impl TaskFlags {
 // Eviction
 // =============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnevictableReason {
+    InProgress,
+    TransientDependents,
+    TransientData,
+    TransientUppers,
+    SessionState,
+    Modified,
+}
+
 /// Eviction level for a task after a snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Evictability {
     /// Task cannot be evicted.
-    No,
+    No(UnevictableReason),
     /// Only the data category can be evicted (meta is still in use).
     DataOnly,
     /// The entire task can be evicted (removed from the storage map).
@@ -426,7 +436,7 @@ impl TaskStorage {
             || self.get_activeness().is_some()
             || self.get_transient_task_type().is_some()
         {
-            return Evictability::No;
+            return Evictability::No(UnevictableReason::InProgress);
         }
 
         // Check if full eviction is possible
@@ -436,28 +446,71 @@ impl TaskStorage {
         let data_evictable = flags.data_restored()
             && !flags.data_modified()
             && !flags.data_modified_during_snapshot();
+        if !data_evictable {
+            return Evictability::No(UnevictableReason::Modified);
+        }
 
-        if meta_evictable && data_evictable {
-            // Non-serializable cell data (e.g. process pool handles) cannot be restored from
-            // disk. Full eviction would permanently lose it. Downgrade to data-only eviction
-            // which preserves transient fields.
-            if self.transient_cell_data().is_some_and(|m| !m.is_empty()) {
+        // Data-category fields with `filter_transient` lose entries referencing transient
+        // tasks when serialized to disk. If the in-memory copy has such entries, evicting
+        // (and later restoring from disk) would silently drop those reverse-dependency
+        // edges, causing transient tasks (e.g., HMR update streams) to never be notified
+        // when cells/outputs change. Prevent data eviction in this case.
+        let has_transient_dependents = self
+            .output_dependent()
+            .iter()
+            .any(|task_id| task_id.is_transient())
+            || self
+                .cell_dependents()
+                .is_some_and(|deps| deps.iter().any(|(_, _, task_id)| task_id.is_transient()))
+            || self
+                .collectibles_dependents()
+                .is_some_and(|deps| deps.iter().any(|(_, id)| id.is_transient()));
+        // If any transient tasks are reading this one we need to not evict so the notifications
+        // still work
+        if has_transient_dependents {
+            return Evictability::No(UnevictableReason::TransientDependents);
+        }
+        // Check for non-serializable cell data (transient category, while this would be preserved
+        // by only
+        if self.transient_cell_data().is_some_and(|m| !m.is_empty())
+            || self.get_output().is_some_and(|o| o.is_transient())
+        {
+            return Evictability::No(UnevictableReason::TransientData);
+        }
+        // Meta fields with filter_transient (children, upper, followers, output,
+        // collectibles_dependents, etc.) lose transient entries when serialized.
+        // If the task participates in the aggregation graph with transient nodes,
+        // full eviction would break those relationships. Check key meta fields.
+        debug_assert!(
+            !self
+                .children()
+                .is_some_and(|c| c.iter().any(|id| id.is_transient())),
+            "persistent tasks cannot have transient children"
+        );
+        if self.upper().iter().any(|(id, _)| id.is_transient()) {
+            return Evictability::No(UnevictableReason::TransientUppers);
+        }
+
+        if self
+            .get_dirty()
+            .is_some_and(|d| matches!(d, Dirtyness::SessionDependent))
+        {
+            return Evictability::No(UnevictableReason::SessionState);
+        }
+        if meta_evictable {
+            // Session-dependent tasks have transient state (current_session_clean flag,
+            // Dirtyness::SessionDependent) that would be lost on full eviction.
+
+            // Aggregating nodes carry transient session-clean container counts that would
+            // be lost on full eviction, breaking has_dirty_containers() checks.
+            if self.aggregation_number.effective >= LEAF_NUMBER {
                 return Evictability::DataOnly;
             }
-            // Session-dependent tasks have transient `current_session_clean` state that cannot
-            // be restored from disk. Losing it would make the task appear dirty in the current
-            // session, causing redundant re-execution. Downgrade to data-only eviction.
-            if matches!(self.get_dirty(), Some(Dirtyness::SessionDependent)) {
-                return Evictability::DataOnly;
-            }
+
             return Evictability::Full;
         }
 
-        if data_evictable {
-            return Evictability::DataOnly;
-        }
-
-        Evictability::No
+        return Evictability::DataOnly;
     }
 }
 
