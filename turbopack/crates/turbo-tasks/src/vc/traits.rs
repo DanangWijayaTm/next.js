@@ -27,6 +27,11 @@ pub unsafe trait VcValueType: ShrinkToFit + Sized + Send + Sync + 'static {
     fn get_value_type_id() -> ValueTypeId;
 
     fn has_serialization() -> bool;
+
+    /// Whether this value type has session-dependent interior state (e.g. `#[bincode(skip)]` fields
+    /// that accumulate runtime state). Cells containing session-stateful values will not be evicted
+    /// mid-session, since the deserialized value would lose that state.
+    fn is_session_stateful() -> bool;
 }
 
 /// A trait implemented on all values trait object references that can be used with a value cell

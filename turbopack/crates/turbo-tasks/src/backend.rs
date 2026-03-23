@@ -589,6 +589,7 @@ pub trait Backend: Sync + Send {
         task: TaskId,
         index: CellId,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         content: CellContent,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         verification_mode: VerificationMode,

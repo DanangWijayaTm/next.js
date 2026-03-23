@@ -172,6 +172,7 @@ pub trait TurboTasksApi: TurboTasksCallApi + Sync + Send {
         task: TaskId,
         index: CellId,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         content: CellContent,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         verification_mode: VerificationMode,
@@ -1568,6 +1569,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
         task: TaskId,
         index: CellId,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         content: CellContent,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         verification_mode: VerificationMode,
@@ -1576,6 +1578,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
             task,
             index,
             is_serializable_cell_content,
+            is_session_stateful,
             content,
             updated_key_hashes,
             verification_mode,
@@ -2021,6 +2024,7 @@ pub struct CurrentCellRef {
     current_task: TaskId,
     index: CellId,
     is_serializable_cell_content: bool,
+    is_session_stateful: bool,
 }
 
 type VcReadTarget<T> = <<T as VcValueType>::Read as VcRead<T>>::Target;
@@ -2069,6 +2073,7 @@ impl CurrentCellRef {
                 self.current_task,
                 self.index,
                 self.is_serializable_cell_content,
+                self.is_session_stateful,
                 CellContent(Some(update)),
                 updated_key_hashes,
                 VerificationMode::EqualityCheck,
@@ -2213,6 +2218,7 @@ impl CurrentCellRef {
             self.current_task,
             self.index,
             self.is_serializable_cell_content,
+            self.is_session_stateful,
             CellContent(Some(SharedReference::new(triomphe::Arc::new(new_value)))),
             None,
             verification_mode,
@@ -2259,6 +2265,7 @@ impl CurrentCellRef {
                 self.current_task,
                 self.index,
                 self.is_serializable_cell_content,
+                self.is_session_stateful,
                 CellContent(Some(shared_ref)),
                 None,
                 verification_mode,
@@ -2279,10 +2286,18 @@ fn extract_sr_value<T: VcValueType>(sr: &SharedReference) -> &T {
 }
 
 pub fn find_cell_by_type<T: VcValueType>() -> CurrentCellRef {
-    find_cell_by_id(T::get_value_type_id(), T::has_serialization())
+    find_cell_by_id(
+        T::get_value_type_id(),
+        T::has_serialization(),
+        T::is_session_stateful(),
+    )
 }
 
-pub fn find_cell_by_id(ty: ValueTypeId, is_serializable_cell_content: bool) -> CurrentCellRef {
+pub fn find_cell_by_id(
+    ty: ValueTypeId,
+    is_serializable_cell_content: bool,
+    is_session_stateful: bool,
+) -> CurrentCellRef {
     CURRENT_TASK_STATE.with(|ts| {
         let current_task = current_task("celling turbo_tasks values");
         let mut ts = ts.write().unwrap();
@@ -2294,6 +2309,7 @@ pub fn find_cell_by_id(ty: ValueTypeId, is_serializable_cell_content: bool) -> C
             current_task,
             index: CellId { type_id: ty, index },
             is_serializable_cell_content,
+            is_session_stateful,
         }
     })
 }

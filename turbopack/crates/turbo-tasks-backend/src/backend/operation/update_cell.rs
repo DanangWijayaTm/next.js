@@ -55,6 +55,7 @@ impl UpdateCellOperation {
         cell: CellId,
         content: CellContent,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         #[cfg(feature = "verify_determinism")] verification_mode: VerificationMode,
         #[cfg(not(feature = "verify_determinism"))] _verification_mode: VerificationMode,
@@ -67,6 +68,10 @@ impl UpdateCellOperation {
         };
 
         let mut task = ctx.task(task_id, TaskDataCategory::All);
+
+        if is_session_stateful {
+            task.set_has_session_stateful_cells(true);
+        }
 
         // We need to detect recomputation, because here the content has not actually changed (even
         // if it's not equal to the old content, as not all values implement Eq). We have to

@@ -1887,6 +1887,10 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             )));
             debug_assert!(old.is_none(), "InProgress already exists");
 
+            // Reset session-stateful flag; it will be re-set during execution if the task
+            // still writes session-stateful cells.
+            task.set_has_session_stateful_cells(false);
+
             // Make all current collectibles outdated (remove left-over outdated collectibles)
             enum Collectible {
                 Current(CollectibleRef, i32),
@@ -3045,6 +3049,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
         task_id: TaskId,
         cell: CellId,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         content: CellContent,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         verification_mode: VerificationMode,
@@ -3055,6 +3060,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             cell,
             content,
             is_serializable_cell_content,
+            is_session_stateful,
             updated_key_hashes,
             verification_mode,
             self.execute_context(turbo_tasks),
@@ -3607,6 +3613,7 @@ impl<B: BackingStorage> Backend for TurboTasksBackend<B> {
         task_id: TaskId,
         cell: CellId,
         is_serializable_cell_content: bool,
+        is_session_stateful: bool,
         content: CellContent,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         verification_mode: VerificationMode,
@@ -3616,6 +3623,7 @@ impl<B: BackingStorage> Backend for TurboTasksBackend<B> {
             task_id,
             cell,
             is_serializable_cell_content,
+            is_session_stateful,
             content,
             updated_key_hashes,
             verification_mode,

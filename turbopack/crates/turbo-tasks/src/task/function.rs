@@ -433,6 +433,10 @@ mod tests {
             fn has_serialization() -> bool {
                 false
             }
+
+            fn is_session_stateful() -> bool {
+                false
+            }
         }
 
         trait AsyncTrait {

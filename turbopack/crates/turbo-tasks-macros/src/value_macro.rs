@@ -80,6 +80,9 @@ struct ValueArguments {
     transparent: bool,
     /// Should we `#[derive(turbo_tasks::OperationValue)]`?
     operation: Option<Span>,
+    /// Whether this value has session-dependent interior state that survives serialization
+    /// but would be lost on eviction/restore mid-session.
+    session_stateful: bool,
 }
 
 impl Parse for ValueArguments {
@@ -91,6 +94,7 @@ impl Parse for ValueArguments {
             manual_eq: false,
             transparent: false,
             operation: None,
+            session_stateful: false,
         };
         let punctuated = input.parse_terminated(Meta::parse, Token![,])?;
         for meta in punctuated {
@@ -148,6 +152,9 @@ impl Parse for ValueArguments {
                 ("transparent", Meta::Path(_)) => {
                     result.transparent = true;
                 }
+                ("session_stateful", Meta::Path(_)) => {
+                    result.session_stateful = true;
+                }
                 ("operation", Meta::Path(path)) => {
                     result.operation = Some(path.span());
                 }
@@ -156,8 +163,8 @@ impl Parse for ValueArguments {
                         &meta,
                         format!(
                             "unexpected {meta:?}, expected \"shared\", \"into\", \
-                             \"serialization\", \"cell\", \"eq\", \"transparent\", or \
-                             \"operation\""
+                             \"serialization\", \"cell\", \"eq\", \"transparent\", \
+                             \"session_stateful\", or \"operation\""
                         ),
                     ));
                 }
@@ -177,6 +184,7 @@ pub fn value(args: TokenStream, input: TokenStream) -> TokenStream {
         manual_eq,
         transparent,
         operation,
+        session_stateful,
     } = parse_macro_input!(args as ValueArguments);
 
     let mut struct_attributes = vec![quote! {
@@ -388,6 +396,7 @@ pub fn value(args: TokenStream, input: TokenStream) -> TokenStream {
         cell_mode,
         new_value_type,
         has_serialization,
+        session_stateful,
     );
 
     let expanded = quote! {
@@ -414,6 +423,7 @@ pub fn value_type_and_register(
     cell_mode: proc_macro2::TokenStream,
     new_value_type: proc_macro2::TokenStream,
     has_serialization: proc_macro2::TokenStream,
+    session_stateful: bool,
 ) -> proc_macro2::TokenStream {
     let value_type_ident = get_value_type_ident(ident);
 
@@ -440,6 +450,10 @@ pub fn value_type_and_register(
 
             fn has_serialization() -> bool {
                 #has_serialization
+            }
+
+            fn is_session_stateful() -> bool {
+                #session_stateful
             }
         }
     }

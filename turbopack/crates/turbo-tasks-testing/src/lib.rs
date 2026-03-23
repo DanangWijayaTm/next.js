@@ -277,6 +277,7 @@ impl TurboTasksApi for VcStorage {
         task: TaskId,
         index: CellId,
         _is_serializable_cell_content: bool,
+        _is_session_stateful: bool,
         content: CellContent,
         _updated_key_hashes: Option<SmallVec<[u64; 2]>>,
         _verification_mode: VerificationMode,

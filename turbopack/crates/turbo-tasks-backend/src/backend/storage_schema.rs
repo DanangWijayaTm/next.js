@@ -187,6 +187,12 @@ struct TaskStorageSchema {
     #[field(storage = "flag", category = "transient")]
     stateful: bool,
 
+    /// Whether this task has cells containing session-stateful values (values with
+    /// non-serializable interior state that accumulates during a session). Tasks with
+    /// this flag set cannot be evicted mid-session.
+    #[field(storage = "flag", category = "transient")]
+    has_session_stateful_cells: bool,
+
     // =========================================================================
     // CHILDREN & AGGREGATION (meta)
     // =========================================================================
@@ -391,7 +397,9 @@ pub enum UnevictableReason {
     TransientData,
     TransientUppers,
     SessionState,
+    SessionStateful,
     Modified,
+    NothingToEvict,
 }
 
 /// Eviction level for a task after a snapshot.
@@ -447,7 +455,11 @@ impl TaskStorage {
             && !flags.data_modified()
             && !flags.data_modified_during_snapshot();
         if !data_evictable {
-            return Evictability::No(UnevictableReason::Modified);
+            return Evictability::No(if flags.data_restored() {
+                UnevictableReason::Modified
+            } else {
+                UnevictableReason::NothingToEvict
+            });
         }
 
         // Data-category fields with `filter_transient` lose entries referencing transient
@@ -496,6 +508,9 @@ impl TaskStorage {
             .is_some_and(|d| matches!(d, Dirtyness::SessionDependent))
         {
             return Evictability::No(UnevictableReason::SessionState);
+        }
+        if flags.has_session_stateful_cells() {
+            return Evictability::No(UnevictableReason::SessionStateful);
         }
         if meta_evictable {
             // Session-dependent tasks have transient state (current_session_clean flag,
