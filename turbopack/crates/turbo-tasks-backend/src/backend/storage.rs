@@ -203,11 +203,15 @@ impl Storage {
             }
         });
 
-        // We also need to unset all the modified flags.
+        // We also need to unset the modified flags and mark data as restored
+        // (on disk and recoverable). This enables eviction of freshly created
+        // tasks that have just been snapshotted.
         for key in removed_modified {
             if let Some(mut inner) = self.map.get_mut(&key) {
                 inner.flags.set_data_modified(false);
                 inner.flags.set_meta_modified(false);
+                inner.flags.set_data_restored(true);
+                inner.flags.set_meta_restored(true);
             }
         }
 

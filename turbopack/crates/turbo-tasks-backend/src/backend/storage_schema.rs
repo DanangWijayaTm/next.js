@@ -294,7 +294,7 @@ struct TaskStorageSchema {
     #[field(storage = "auto_map", category = "transient", shrink_on_completion)]
     in_progress_cells: AutoMap<CellId, InProgressCellState>,
 
-    #[field(storage = "direct", category = "data", inline, keep_on_restore)]
+    #[field(storage = "direct", category = "data", inline)]
     pub persistent_task_type: Option<Arc<CachedTaskType>>,
 
     #[field(storage = "direct", category = "transient")]
@@ -438,6 +438,18 @@ impl TaskStorage {
             && !flags.data_modified_during_snapshot();
 
         if meta_evictable && data_evictable {
+            // Non-serializable cell data (e.g. process pool handles) cannot be restored from
+            // disk. Full eviction would permanently lose it. Downgrade to data-only eviction
+            // which preserves transient fields.
+            if self.transient_cell_data().is_some_and(|m| !m.is_empty()) {
+                return Evictability::DataOnly;
+            }
+            // Session-dependent tasks have transient `current_session_clean` state that cannot
+            // be restored from disk. Losing it would make the task appear dirty in the current
+            // session, causing redundant re-execution. Downgrade to data-only eviction.
+            if matches!(self.get_dirty(), Some(Dirtyness::SessionDependent)) {
+                return Evictability::DataOnly;
+            }
             return Evictability::Full;
         }
 

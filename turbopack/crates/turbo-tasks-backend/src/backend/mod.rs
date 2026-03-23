@@ -236,6 +236,19 @@ impl<B: BackingStorage> TurboTasksBackend<B> {
     pub fn backing_storage(&self) -> &B {
         &self.0.backing_storage
     }
+
+    /// Perform a snapshot and then evict all evictable tasks from memory.
+    ///
+    /// This is exposed for integration tests that need to verify the
+    /// snapshot → evict → restore cycle works correctly.
+    ///
+    /// Returns `(snapshot_had_new_data, full_evicted, data_only_evicted)`.
+    pub fn snapshot_and_evict(
+        &self,
+        turbo_tasks: &dyn TurboTasksBackendApi<TurboTasksBackend<B>>,
+    ) -> (bool, usize, usize) {
+        self.0.snapshot_and_evict(turbo_tasks)
+    }
 }
 
 impl<B: BackingStorage> TurboTasksBackendInner<B> {
@@ -369,6 +382,26 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
 
     fn should_evict(&self) -> bool {
         self.options.evict_after_snapshot && self.should_persist()
+    }
+
+    /// Perform a snapshot and then evict all evictable tasks from memory.
+    ///
+    /// This is exposed for integration tests that need to verify the
+    /// snapshot → evict → restore cycle works correctly.
+    ///
+    /// Returns `(snapshot_had_new_data, full_evicted, data_only_evicted)`.
+    pub fn snapshot_and_evict(
+        &self,
+        turbo_tasks: &dyn TurboTasksBackendApi<TurboTasksBackend<B>>,
+    ) -> (bool, usize, usize) {
+        assert!(
+            self.should_persist(),
+            "snapshot_and_evict requires persistence"
+        );
+        let snapshot_result = self.snapshot_and_persist(None, "test", turbo_tasks);
+        let had_new_data = snapshot_result.map_or(false, |(_, new_data)| new_data);
+        let (full, data_only) = self.storage.evict_after_snapshot();
+        (had_new_data, full, data_only)
     }
 
     fn should_restore(&self) -> bool {
@@ -2798,6 +2831,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                             // Evict persisted tasks from memory to reclaim space.
                             // Like compaction, this runs after snapshot_and_persist
                             // as a separate concern.
+
                             if this.should_evict() {
                                 let evict_span = tracing::info_span!(
                                     parent: background_span.id(),

@@ -246,7 +246,7 @@ impl<T: KeyValueDatabase + Send + Sync + 'static> BackingStorageSealed
 
         {
             let _span = tracing::trace_span!("update task data").entered();
-            let counts: (usize, usize) =
+            let (meta_count, data_count) =
                 parallel::map_collect_owned::<_, _, Result<Vec<_>>>(snapshots, |tasks| {
                     let mut local_meta = 0usize;
                     let mut local_data = 0usize;
@@ -280,8 +280,8 @@ impl<T: KeyValueDatabase + Send + Sync + 'static> BackingStorageSealed
                 .into_iter()
                 .fold((0, 0), |(am, ad), (m, d)| (am + m, ad + d));
 
-            span.record("meta", counts.0);
-            span.record("data", counts.1);
+            span.record("meta", meta_count);
+            span.record("data", data_count);
             let flush_span = tracing::trace_span!("flush task data").entered();
             parallel::try_for_each(&[KeySpace::TaskMeta, KeySpace::TaskData], |&key_space| {
                 let _span = flush_span.clone().entered();

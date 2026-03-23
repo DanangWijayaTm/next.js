@@ -69,12 +69,6 @@ struct FieldInfo {
     /// If true, drop this field entirely after execution completes if the task is immutable.
     /// Immutable tasks don't re-execute, so dependency tracking fields are not needed.
     drop_on_completion_if_immutable: bool,
-    /// If true, skip overwriting this field during restore if it already has a value.
-    /// Used for fields like `persistent_task_type` that may be set from a shared Arc
-    /// before restore runs, to avoid allocating a duplicate.
-    ///
-    /// The field type must be `Option<T>` (uses `.is_none()` to detect empty state).
-    keep_on_restore: bool,
 }
 
 impl FieldInfo {
@@ -369,8 +363,6 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
     let mut use_default = false;
     let mut shrink_on_completion = false;
     let mut drop_on_completion_if_immutable = false;
-    let mut keep_on_restore = false;
-
     // Find and parse the field attribute
     if let Some(attr) = field.attrs.iter().find(|attr| {
         attr.path()
@@ -473,15 +465,13 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
                         shrink_on_completion = true;
                     } else if ident == "drop_on_completion_if_immutable" {
                         drop_on_completion_if_immutable = true;
-                    } else if ident == "keep_on_restore" {
-                        keep_on_restore = true;
                     } else {
                         meta.span()
                             .unwrap()
                             .error(format!(
                                 "unknown modifier `{ident}`, expected `inline`, \
-                                 `filter_transient`, `default`, `shrink_on_completion`, \
-                                 `drop_on_completion_if_immutable`, or `keep_on_restore`"
+                                 `filter_transient`, `default`, `shrink_on_completion`, or \
+                                 `drop_on_completion_if_immutable`"
                             ))
                             .emit();
                     }
@@ -558,7 +548,6 @@ fn parse_field_storage_attributes(field: &syn::Field) -> FieldInfo {
         use_default,
         shrink_on_completion,
         drop_on_completion_if_immutable,
-        keep_on_restore,
     }
 }
 
@@ -673,29 +662,12 @@ fn gen_clone_inline_fields<'a>(fields: impl Iterator<Item = &'a FieldInfo>) -> V
 }
 
 /// Generate inline field restore assignments: `self.field = source.field;`
-///
-/// For fields with `keep_on_restore`, generates a conditional assignment that only
-/// overwrites if the target field is currently at its default/None value.
 fn gen_restore_inline_fields<'a>(fields: impl Iterator<Item = &'a FieldInfo>) -> Vec<TokenStream> {
     fields
         .map(|field| {
             let field_name = &field.field_name;
-            if field.keep_on_restore {
-                // Only overwrite if the field is currently None/default.
-                // This preserves values set before restore (e.g., shared Arcs from task_cache).
-                let field_name_str = field_name.to_string();
-                quote! {
-                    if self.#field_name.is_none() {
-                        self.#field_name = source.#field_name;
-                    } else {
-                        debug_assert_eq!(self.#field_name, source.#field_name,
-                            concat!("restored data is not identical to already stored data for ", #field_name_str));
-                    }
-                }
-            } else {
-                quote! {
-                    self.#field_name = source.#field_name;
-                }
+            quote! {
+                self.#field_name = source.#field_name;
             }
         })
         .collect()
