@@ -11,6 +11,7 @@ use bitfield::bitfield;
 use byteorder::{BE, ReadBytesExt};
 use memmap2::{Mmap, MmapOptions};
 use smallvec::SmallVec;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, big_endian as be};
 
 use crate::{
     QueryKey,
@@ -44,6 +45,43 @@ impl Display for MetaEntryFlags {
             f.pad_integral(true, "", "cold")
         } else {
             f.pad_integral(true, "", "warm")
+        }
+    }
+}
+
+/// On-disk layout of a single entry header in the `.meta` file.
+///
+/// Fields are big-endian to match the existing wire format written by [`MetaFileBuilder`].
+#[repr(C, packed)]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Clone, Copy)]
+pub(crate) struct EntryHeader {
+    sequence_number: be::U32,
+    block_count: be::U16,
+    min_hash: be::U64,
+    max_hash: be::U64,
+    size: be::U64,
+    flags: be::U32,
+    amqf_end_offset: be::U32,
+}
+
+impl EntryHeader {
+    pub(crate) fn new(
+        sequence_number: u32,
+        block_count: u16,
+        min_hash: u64,
+        max_hash: u64,
+        size: u64,
+        flags: MetaEntryFlags,
+        amqf_end_offset: u32,
+    ) -> Self {
+        Self {
+            sequence_number: be::U32::new(sequence_number),
+            block_count: be::U16::new(block_count),
+            min_hash: be::U64::new(min_hash),
+            max_hash: be::U64::new(max_hash),
+            size: be::U64::new(size),
+            flags: be::U32::new(flags.0),
+            amqf_end_offset: be::U32::new(amqf_end_offset),
         }
     }
 }
@@ -104,12 +142,7 @@ impl MetaEntry {
         &amqf_data[self.amqf_data_offset.start as usize..self.amqf_data_offset.end as usize]
     }
 
-    /// Returns a reference to the AMQF filter for this entry.
-    pub fn amqf(&self) -> &qfilter::FilterRef<'static> {
-        &self.amqf
-    }
-
-    pub fn sst(&self, meta: &MetaFile) -> Result<&StaticSortedFile> {
+    fn sst(&self, meta: &MetaFile) -> Result<&StaticSortedFile> {
         self.sst.get_or_try_init(|| {
             StaticSortedFile::open(&meta.db_path, self.sst_data).with_context(|| {
                 format!(
@@ -231,15 +264,6 @@ impl MetaFile {
             .with_context(|| format!("Unable to open meta file {filename}"))
     }
 
-    /// Size of a single entry's header in the meta file.
-    const ENTRY_HEADER_SIZE: u32 = size_of::<u32>() as u32 // sequence_number
-        + size_of::<u16>() as u32 // block_count
-        + size_of::<u64>() as u32 // min_hash
-        + size_of::<u64>() as u32 // max_hash
-        + size_of::<u64>() as u32 // size
-        + size_of::<u32>() as u32 // flags
-        + size_of::<u32>() as u32; // amqf_end_offset
-
     fn open_internal(db_path: PathBuf, sequence_number: u32, path: &Path) -> Result<Self> {
         let file = File::open(path).context("Failed to open meta file")?;
         let mmap = unsafe { MmapOptions::new().map(&file) }.context("Failed to mmap")?;
@@ -266,22 +290,29 @@ impl MetaFile {
         // Remaining header: count * ENTRY_HEADER_SIZE + used_keys_end_offset.
         let header_so_far = (mmap.len() - reader.len()) as u32;
         let amqf_data_start =
-            header_so_far + count * Self::ENTRY_HEADER_SIZE + size_of::<u32>() as u32;
+            header_so_far + count * (size_of::<EntryHeader>() as u32) + size_of::<u32>() as u32;
         let amqf_data = &mmap[amqf_data_start as usize..];
 
         // Parse entries and eagerly deserialize AMQF filters as zero-copy FilterRefs.
         let mut entries = Vec::with_capacity(count as usize);
         let mut start_of_amqf_data_offset: u32 = 0;
         for _ in 0..count {
+            let header = EntryHeader::read_from_prefix(reader)
+                .map(|(h, rest)| {
+                    reader = rest;
+                    h
+                })
+                .ok()
+                .context("Entry header out of bounds")?;
             let sst_data = StaticSortedFileMetaData {
-                sequence_number: reader.read_u32::<BE>()?,
-                block_count: reader.read_u16::<BE>()?,
+                sequence_number: header.sequence_number.get(),
+                block_count: header.block_count.get(),
             };
-            let min_hash = reader.read_u64::<BE>()?;
-            let max_hash = reader.read_u64::<BE>()?;
-            let size = reader.read_u64::<BE>()?;
-            let flags = MetaEntryFlags(reader.read_u32::<BE>()?);
-            let end_of_amqf_data_offset = reader.read_u32::<BE>()?;
+            let min_hash = header.min_hash.get();
+            let max_hash = header.max_hash.get();
+            let size = header.size.get();
+            let flags = MetaEntryFlags(header.flags.get());
+            let end_of_amqf_data_offset = header.amqf_end_offset.get();
 
             let amqf_bytes = amqf_data
                 .get(start_of_amqf_data_offset as usize..end_of_amqf_data_offset as usize)
@@ -289,12 +320,13 @@ impl MetaFile {
             // Deserialize the filter borrowing from the mmap, then erase the lifetime.
             // Safety: the mmap is kept alive by MetaFile and is dropped after entries (field
             // declaration order), so the borrow remains valid for the lifetime of the MetaEntry.
-            let amqf: qfilter::FilterRef<'_> = pot::from_slice(amqf_bytes).with_context(|| {
-                format!(
-                    "Failed to deserialize AMQF from {:08}.meta for {:08}.sst",
-                    sequence_number, sst_data.sequence_number
-                )
-            })?;
+            let amqf: qfilter::FilterRef<'_> =
+                postcard::from_bytes(amqf_bytes).with_context(|| {
+                    format!(
+                        "Failed to deserialize AMQF from {:08}.meta for {:08}.sst",
+                        sequence_number, sst_data.sequence_number
+                    )
+                })?;
             let amqf: qfilter::FilterRef<'static> = unsafe { std::mem::transmute(amqf) };
 
             entries.push(MetaEntry {
@@ -367,7 +399,7 @@ impl MetaFile {
         }
         let amqf = &self.amqf_data()[self.start_of_used_keys_amqf_data_offset as usize
             ..self.end_of_used_keys_amqf_data_offset as usize];
-        Ok(Some(pot::from_slice(amqf).with_context(|| {
+        Ok(Some(postcard::from_bytes(amqf).with_context(|| {
             format!(
                 "Failed to deserialize used key hashes AMQF from {:08}.meta",
                 self.sequence_number
@@ -423,7 +455,7 @@ impl MetaFile {
             if key_hash < entry.min_hash || key_hash > entry.max_hash {
                 continue;
             }
-            let amqf = entry.amqf();
+            let amqf = &entry.amqf;
             if !amqf.contains_fingerprint(key_hash) {
                 miss_result = MetaLookupResult::QuickFilterMiss;
                 continue;
@@ -523,7 +555,6 @@ impl MetaFile {
                 }
                 continue;
             }
-            let amqf = entry.amqf();
             for (hash, index, result) in &mut cells[start_index..=end_index] {
                 debug_assert!(
                     *hash >= entry.min_hash && *hash <= entry.max_hash,
@@ -532,7 +563,7 @@ impl MetaFile {
                 if result.is_some() {
                     continue;
                 }
-                if !amqf.contains_fingerprint(*hash) {
+                if !entry.amqf.contains_fingerprint(*hash) {
                     #[cfg(feature = "stats")]
                     {
                         lookup_result.quick_filter_misses += 1;

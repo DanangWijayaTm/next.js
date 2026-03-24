@@ -955,8 +955,8 @@ impl<E: Entry> StreamingSstWriter<E> {
         let mut filter = self.filter.take().unwrap();
         filter.shrink_to_fit();
 
-        // Serialize AMQF using pot for zero-copy deserialization via FilterRef
-        let amqf = pot::to_vec(&filter).expect("AMQF serialization failed");
+        // Serialize AMQF using postcard for zero-copy deserialization via FilterRef
+        let amqf = postcard::to_allocvec(&filter).expect("AMQF serialization failed");
 
         // Compute file size from block offsets rather than calling stream_position()
         // (which requires a flush + seek).

@@ -24,8 +24,9 @@ lzzzz = { workspace = true }
 memmap2 = "0.9.5"
 nohash-hasher = { workspace = true }
 parking_lot = { workspace = true }
-pot = "3.0.0"
+postcard = { workspace = true, features = ["alloc", "use-std"] }
 qfilter = { version = "0.3.0-alpha.3", features = ["serde"] }
+zerocopy = { version = "0.8", features = ["derive"] }
 quick_cache = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }

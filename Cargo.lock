@@ -5407,17 +5407,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pot"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf741fa415952eb20f27fbc210dc85f31cc7cdc80aa3ce81d5e27d28a6f45dc2"
-dependencies = [
- "byteorder",
- "half",
- "serde",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9452,7 +9441,7 @@ dependencies = [
  "memmap2 0.9.5",
  "nohash-hasher",
  "parking_lot",
- "pot",
+ "postcard",
  "qfilter",
  "quick_cache",
  "rand 0.10.0",
@@ -9464,6 +9453,7 @@ dependencies = [
  "tracing",
  "turbo-tasks-malloc",
  "xxhash-rust",
+ "zerocopy",
 ]
 
 [[package]]
