@@ -36,6 +36,10 @@ function getDesiredCompilerOptions(
   const moduleResolutionKindNode10 = 'node10'
   const moduleResolutionKindNode12 = 'node12'
   const moduleResolutionKindNodeJs = 'node'
+  const isTypeScript6OrNewer = semver.gte(typescriptVersion, '6.0.0')
+  const defaultModuleResolution = isTypeScript6OrNewer
+    ? moduleResolutionKindBundler
+    : moduleResolutionKindNodeJs
 
   // Jsx
   const jsxEmitReactJSX = 'react-jsx'
@@ -89,12 +93,13 @@ function getDesiredCompilerOptions(
             reason: 'requirement for SWC / babel',
           },
           moduleResolution: {
-            // In TypeScript 5.0, `NodeJs` has renamed to `Node10`
-            parsedValue: moduleResolutionKindBundler,
+            // In TypeScript 5.0, `NodeJs` has renamed to `Node10`.
+            // TypeScript 6 deprecates `NodeJs`/`Node10`.
+            parsedValue: defaultModuleResolution,
             // All of these values work:
             parsedValues: [
-              moduleResolutionKindNode10,
-              moduleResolutionKindNodeJs,
+              !isTypeScript6OrNewer && moduleResolutionKindNode10,
+              !isTypeScript6OrNewer && moduleResolutionKindNodeJs,
               // only newer TypeScript versions have this field, it
               // will be filtered for new versions of TypeScript
               moduleResolutionKindNode12,
@@ -102,7 +107,7 @@ function getDesiredCompilerOptions(
               moduleKindNodeNext,
               moduleResolutionKindBundler,
             ].filter((val) => typeof val !== 'undefined'),
-            value: 'node',
+            value: defaultModuleResolution,
             reason: 'to match webpack resolution',
           },
           resolveJsonModule: {
