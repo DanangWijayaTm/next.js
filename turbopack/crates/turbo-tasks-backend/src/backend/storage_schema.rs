@@ -193,6 +193,18 @@ struct TaskStorageSchema {
     #[field(storage = "flag", category = "transient")]
     has_session_stateful_cells: bool,
 
+    /// Whether meta data is currently being restored from persistent storage.
+    /// Set before releasing the task lock to do I/O, cleared after restore completes.
+    /// Eviction backs off when this is set to avoid racing with in-flight restores.
+    #[field(storage = "flag", category = "transient")]
+    meta_restoring: bool,
+
+    /// Whether data is currently being restored from persistent storage.
+    /// Set before releasing the task lock to do I/O, cleared after restore completes.
+    /// Eviction backs off when this is set to avoid racing with in-flight restores.
+    #[field(storage = "flag", category = "transient")]
+    data_restoring: bool,
+
     // =========================================================================
     // CHILDREN & AGGREGATION (meta)
     // =========================================================================
@@ -393,6 +405,7 @@ impl TaskFlags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnevictableReason {
     InProgress,
+    Restoring,
     TransientDependents,
     TransientData,
     TransientUppers,
@@ -445,6 +458,14 @@ impl TaskStorage {
             || self.get_transient_task_type().is_some()
         {
             return Evictability::No(UnevictableReason::InProgress);
+        }
+
+        // Back off if another thread is currently restoring this task's data from
+        // disk. Without this check, eviction could clear data that was already
+        // determined to be "restored" by the restoring thread (which released the
+        // lock to do I/O), causing the restoring thread to skip re-reading it.
+        if flags.meta_restoring() || flags.data_restoring() {
+            return Evictability::No(UnevictableReason::Restoring);
         }
 
         // Check if full eviction is possible

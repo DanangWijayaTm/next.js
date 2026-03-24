@@ -10,6 +10,40 @@ use turbo_tasks::{
 };
 use turbo_tasks_backend::{BackendOptions, GitVersionInfo, TurboBackingStorage, TurboTasksBackend};
 
+fn create_tt_with_workers(
+    name: &str,
+    num_workers: usize,
+) -> Arc<TurboTasks<TurboTasksBackend<TurboBackingStorage>>> {
+    use std::hash::BuildHasher;
+    let path = std::path::PathBuf::from(format!(
+        "{}/.cache/{}",
+        env!("CARGO_TARGET_TMPDIR"),
+        rustc_hash::FxBuildHasher.hash_one(name)
+    ));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    TurboTasks::new(TurboTasksBackend::new(
+        BackendOptions {
+            num_workers: Some(num_workers),
+            small_preallocation: true,
+            storage_mode: Some(turbo_tasks_backend::StorageMode::ReadWrite),
+            evict_after_snapshot: true,
+            ..Default::default()
+        },
+        turbo_tasks_backend::turbo_backing_storage(
+            path.as_path(),
+            &GitVersionInfo {
+                describe: "test-unversioned",
+                dirty: false,
+            },
+            false,
+            true,
+        )
+        .unwrap()
+        .0,
+    ))
+}
+
 fn create_tt(name: &str) -> Arc<TurboTasks<TurboTasksBackend<TurboBackingStorage>>> {
     use std::hash::BuildHasher;
     let path = std::path::PathBuf::from(format!(
@@ -274,4 +308,260 @@ async fn deep_chain(input: ResolvedVc<Step>) -> Result<Vc<Output>> {
         random: rand::random(),
     }
     .cell())
+}
+
+// =========================================================================
+// Session-stateful value — accumulates interior state that should not be
+// evicted mid-session.
+// =========================================================================
+
+/// A value marked `session_stateful` — tasks that write cells of this type
+/// must not be evicted, because deserialization would lose the interior state.
+#[turbo_tasks::value(session_stateful)]
+struct SessionCounter {
+    count: u32,
+}
+
+/// Intermediate operation task that writes a session-stateful cell.
+/// Because this task is only resolved (not directly read) by the top-level
+/// transient task, it has no transient dependents and is eligible for eviction
+/// consideration — but should be blocked by the session-stateful flag.
+#[turbo_tasks::function(operation)]
+fn create_session_counter(initial: u32) -> Vc<SessionCounter> {
+    SessionCounter { count: initial }.cell()
+}
+
+/// Resolves the session counter internally so the transient run_once task
+/// doesn't need to resolve it directly (which would add a transient dependent
+/// edge to create_session_counter, preventing us from testing the
+/// session-stateful eviction gate).
+#[turbo_tasks::function(operation)]
+async fn read_session_counter(initial: u32) -> Result<Vc<Output>> {
+    let counter = create_session_counter(initial)
+        .resolve_strongly_consistent()
+        .await?;
+    let c = counter.await?;
+    Ok(Output {
+        value: c.count,
+        random: rand::random(),
+    }
+    .cell())
+}
+
+/// Verify that tasks with session-stateful cells are NOT evicted, while
+/// normal persistent tasks without transient dependents ARE evicted.
+///
+/// Uses a two-layer chain so that create_session_counter (the task that writes
+/// the session-stateful cell) has no transient dependents — only
+/// read_session_counter reads it, and it is itself a persistent task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn eviction_session_stateful_survives() {
+    let tt = create_tt("eviction_session_stateful_survives");
+    let tt2 = tt.clone();
+
+    let result = turbo_tasks::run_once(tt.clone(), async move {
+        unmark_top_level_task_may_leak_eventually_consistent_state();
+
+        // read_session_counter internally creates+resolves create_session_counter(42).
+        // The transient run_once only reads read_session_counter, so
+        // create_session_counter has no transient dependents and is eligible for
+        // eviction consideration — but should be blocked by SessionStateful.
+        let reader = read_session_counter(42);
+        let read = reader.read_strongly_consistent().await?;
+        assert_eq!(read.value, 42);
+
+        // Also build a normal (evictable) chain for comparison
+        let state_op = create_state(10);
+        let state_vc = state_op.resolve_strongly_consistent().await?;
+        let normal = deep_chain(state_vc);
+        let normal_read = normal.read_strongly_consistent().await?;
+        // (10+1)*3+10 = 43
+        assert_eq!(normal_read.value, 43);
+
+        // Snapshot + evict
+        let (had_data, full, data_only) = tt2.backend().snapshot_and_evict(&*tt2);
+        println!(
+            "session_stateful: snapshot had_data={had_data}, evicted: full={full}, \
+             data_only={data_only}"
+        );
+        assert!(had_data, "snapshot should have persisted data");
+        // The normal intermediate tasks (add_one, times_three, plus_ten) should be
+        // data-only evicted. The session-stateful create_session_counter should NOT
+        // be evicted.
+        assert!(data_only > 0, "normal intermediate tasks should be evicted");
+
+        // After eviction, reading through the session-stateful chain should still work
+        let read2 = reader.read_strongly_consistent().await?;
+        assert_eq!(read2.value, 42);
+
+        anyhow::Ok(())
+    })
+    .await;
+    tt.stop_and_wait().await;
+    result.unwrap();
+}
+
+/// Verify that transient tasks reading persistent tasks still get invalidated
+/// after the persistent tasks are evicted and restored.
+///
+/// The `run_once` closure is itself a transient task. We create persistent
+/// operation tasks, evict them, then mutate state and confirm the transient
+/// reader sees the updated value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn eviction_transient_reader_invalidated() {
+    let tt = create_tt("eviction_transient_reader_invalidated");
+    let tt2 = tt.clone();
+
+    let result = turbo_tasks::run_once(tt.clone(), async move {
+        unmark_top_level_task_may_leak_eventually_consistent_state();
+
+        // Create persistent state + compute tasks
+        let state_op = create_state(50);
+        let state_vc = state_op.resolve_strongly_consistent().await?;
+        let state = state_op.read_strongly_consistent().await?;
+
+        let output = compute(state_vc);
+        let read = output.read_strongly_consistent().await?;
+        assert_eq!(read.value, 50);
+        let initial_random = read.random;
+
+        // Snapshot + evict. The persistent `compute` task has a transient dependent
+        // (this run_once closure), so it may be blocked from full eviction. But we
+        // still exercise the evict path — some tasks (like create_state) may be
+        // data-only evicted.
+        let (had_data, full, data_only) = tt2.backend().snapshot_and_evict(&*tt2);
+        println!(
+            "transient_reader: snapshot had_data={had_data}, evicted: full={full}, \
+             data_only={data_only}"
+        );
+        assert!(had_data, "snapshot should have persisted data");
+
+        // Mutate state — this invalidates the persistent task, which must propagate
+        // to the transient reader (this closure) even after eviction.
+        state.set(99);
+
+        let read = output.read_strongly_consistent().await?;
+        assert_eq!(read.value, 99);
+        assert_ne!(
+            read.random, initial_random,
+            "task should have been re-executed after invalidation"
+        );
+
+        // Second eviction cycle
+        let (_, full2, data_only2) = tt2.backend().snapshot_and_evict(&*tt2);
+        println!("transient_reader (2nd): evicted: full={full2}, data_only={data_only2}");
+
+        state.set(0);
+
+        let read = output.read_strongly_consistent().await?;
+        assert_eq!(read.value, 0);
+
+        anyhow::Ok(())
+    })
+    .await;
+    tt.stop_and_wait().await;
+    result.unwrap();
+}
+
+// =========================================================================
+// Stress test — concurrent eviction + restore
+// =========================================================================
+
+/// Adds an offset to a value — the offset parameter makes each call a unique
+/// memoized task, creating truly independent intermediate tasks for fan-out.
+#[turbo_tasks::function(operation)]
+async fn add_offset(input: ResolvedVc<Step>, offset: u32) -> Result<Vc<u32>> {
+    let value = *input.await?.get();
+    Ok(Vc::cell(value.wrapping_add(offset)))
+}
+
+/// Multiplies by a factor — unique per factor argument.
+#[turbo_tasks::function(operation)]
+async fn multiply(input: ResolvedVc<u32>, factor: u32) -> Result<Vc<u32>> {
+    let value = *input.await?;
+    Ok(Vc::cell(value.wrapping_mul(factor)))
+}
+
+/// Wide fan-out helper: creates `width` independent compute chains from a
+/// single state. Each chain uses unique arguments (offset/factor) so they
+/// produce distinct memoized tasks — `width * 2` intermediate persistent tasks
+/// that are candidates for eviction.
+#[turbo_tasks::function(operation)]
+async fn fan_out(input: ResolvedVc<Step>, width: u32) -> Result<Vc<u32>> {
+    let mut total = 0u32;
+    for i in 0..width {
+        let a = add_offset(input, i).resolve_strongly_consistent().await?;
+        let b = multiply(a, i.wrapping_add(2))
+            .resolve_strongly_consistent()
+            .await?;
+        total = total.wrapping_add(*b.await?);
+    }
+    Ok(Vc::cell(total))
+}
+
+/// Stress test: rapidly cycles between invalidation, reading, and eviction
+/// across a wide fan-out of tasks. Each cycle snapshots and evicts, then
+/// immediately invalidates and reads — forcing concurrent restore from disk
+/// while the evicted data is being accessed by worker threads.
+///
+/// Before the restoring-bit fix, this would panic with "Cell no longer exists"
+/// because eviction could clear data on a task mid-restore (between the lock
+/// release for I/O and the lock re-acquire for merge).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn eviction_stress_concurrent() {
+    let tt = create_tt_with_workers("eviction_stress_concurrent", 4);
+    let tt2 = tt.clone();
+
+    let result = turbo_tasks::run_once(tt.clone(), async move {
+        unmark_top_level_task_may_leak_eventually_consistent_state();
+
+        let state_op = create_state(1);
+        let state_vc = state_op.resolve_strongly_consistent().await?;
+        let state = state_op.read_strongly_consistent().await?;
+
+        // fan_out creates width * 2 intermediate tasks per call
+        let width = 20u32;
+        let output = fan_out(state_vc, width);
+
+        // Helper: compute the expected fan_out result for a given state value.
+        // fan_out sums (state + i) * (i + 2) for i in 0..width.
+        let expected_for = |state_val: u32| -> u32 {
+            (0..width)
+                .map(|i| state_val.wrapping_add(i).wrapping_mul(i.wrapping_add(2)))
+                .fold(0u32, |acc, x| acc.wrapping_add(x))
+        };
+
+        // Initial read, then snapshot+evict so data is on disk and evicted.
+        let read = *output.read_strongly_consistent().await?;
+        assert_eq!(read, expected_for(1));
+        tt2.backend().snapshot_and_evict(&*tt2);
+
+        // Rapid invalidation + eviction cycles. Each cycle:
+        // 1. Invalidate state (forces tasks to be dirty/re-scheduled)
+        // 2. Read (forces restore from disk for evicted tasks)
+        // 3. Snapshot + evict (persists new data, evicts again)
+        //
+        // The contention between step 2 (restore) and step 3 (eviction) from
+        // the previous cycle's still-running workers is what triggers the race.
+        let mut total_evicted = 0usize;
+        for i in 1u32..=50 {
+            state.set(i);
+            let read = *output.read_strongly_consistent().await?;
+            assert_eq!(
+                read,
+                expected_for(i),
+                "cycle {i}: expected {}, got {read}",
+                expected_for(i)
+            );
+            let (_, full, data_only) = tt2.backend().snapshot_and_evict(&*tt2);
+            total_evicted += full + data_only;
+        }
+        println!("stress test: {total_evicted} total evictions across 50 cycles");
+
+        anyhow::Ok(())
+    })
+    .await;
+
+    tt.stop_and_wait().await;
+    result.unwrap();
 }
