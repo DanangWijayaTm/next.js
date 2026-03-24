@@ -5,14 +5,6 @@ import { NextInstance } from 'e2e-utils'
 describe('correct tsconfig.json defaults', () => {
   let next: NextInstance
 
-  const getExpectedModuleResolution = async () => {
-    const typescriptPackageJson = JSON.parse(
-      await next.readFile('node_modules/typescript/package.json')
-    ) as { version: string }
-    const tsMajor = Number(typescriptPackageJson.version.split('.')[0])
-    return tsMajor >= 6 ? 'bundler' : 'node'
-  }
-
   beforeAll(async () => {
     next = await createNext({
       files: {
@@ -44,13 +36,10 @@ describe('correct tsconfig.json defaults', () => {
       }, 'ready')
 
       const tsconfig = JSON.parse(content)
-      const expectedModuleResolution = await getExpectedModuleResolution()
       expect(next.cliOutput).not.toContain('moduleResolution')
 
       expect(tsconfig.compilerOptions).toEqual(
-        expect.objectContaining({
-          moduleResolution: expectedModuleResolution,
-        })
+        expect.objectContaining({ moduleResolution: 'node' })
       )
     } finally {
       await next.stop()
@@ -66,12 +55,9 @@ describe('correct tsconfig.json defaults', () => {
       await next.start()
 
       const tsconfig = JSON.parse(await next.readFile('tsconfig.json'))
-      const expectedModuleResolution = await getExpectedModuleResolution()
 
       expect(tsconfig.compilerOptions).toEqual(
-        expect.objectContaining({
-          moduleResolution: expectedModuleResolution,
-        })
+        expect.objectContaining({ moduleResolution: 'node' })
       )
       expect(next.cliOutput).not.toContain('moduleResolution')
     } finally {
