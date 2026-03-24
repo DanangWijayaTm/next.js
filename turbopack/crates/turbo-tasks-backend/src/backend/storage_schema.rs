@@ -482,7 +482,7 @@ impl TaskStorage {
             && !flags.data_modified_during_snapshot()
             && !flags.has_transient_cell_or_output_dependents()
             && !flags.has_session_stateful_cells()
-            && !self.transient_cell_data().is_some_and(|m| !m.is_empty());
+            && self.transient_cell_data().is_none_or(|m| m.is_empty());
 
         // === Meta evictability (independent) ===
         // Meta can be dropped if it's been restored from disk, hasn't been modified,
@@ -495,7 +495,7 @@ impl TaskStorage {
             && !flags.meta_modified()
             && !flags.meta_modified_during_snapshot()
             && !flags.has_transient_upper_or_collectibles_dependents()
-            && !self.get_output().is_some_and(|o| o.is_transient());
+            && self.get_output().is_none_or(|o| !o.is_transient());
 
         // === Combined decision ===
         match (data_evictable, meta_evictable) {
