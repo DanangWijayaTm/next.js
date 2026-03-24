@@ -1303,6 +1303,9 @@ impl AggregationUpdateQueue {
                 let upper_ids = get_uppers(&upper);
 
                 // Add the same amount of upper edges
+                if upper_id.is_transient() {
+                    task.set_has_transient_upper_or_collectibles_dependents(true);
+                }
                 if task.update_upper_count(upper_id, count) {
                     if task.upper_len().is_power_of_two() {
                         self.push_optimize_task(task_id);
@@ -2025,6 +2028,9 @@ impl AggregationUpdateQueue {
                     }
 
                     // STEP 6a
+                    if upper_id.is_transient() {
+                        new_follower.set_has_transient_upper_or_collectibles_dependents(true);
+                    }
                     if new_follower.update_upper_count(upper_id, count) {
                         // It's a new upper
                         // STEP 6b
@@ -2295,6 +2301,9 @@ impl AggregationUpdateQueue {
                     }
 
                     // STEP 6a
+                    if upper_id.is_transient() {
+                        new_follower.set_has_transient_upper_or_collectibles_dependents(true);
+                    }
                     if new_follower.update_upper_count(upper_id, count) {
                         // STEP 6b
                         if new_follower.upper_len().is_power_of_two() {
@@ -2507,6 +2516,9 @@ impl AggregationUpdateQueue {
                 let _span = trace_span!("new inner").entered();
 
                 // STEP 6a
+                if upper_id.is_transient() {
+                    new_follower.set_has_transient_upper_or_collectibles_dependents(true);
+                }
                 if new_follower.update_upper_count(upper_id, count) {
                     // STEP 6b
                     if new_follower.upper_len().is_power_of_two() {

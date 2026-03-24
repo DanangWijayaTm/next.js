@@ -47,7 +47,7 @@ use turbo_tasks::{
 
 pub use self::{
     operation::AnyOperation,
-    storage::{SpecificTaskDataCategory, TaskDataCategory},
+    storage::{EvictionCounts, SpecificTaskDataCategory, TaskDataCategory},
 };
 #[cfg(feature = "trace_task_dirty")]
 use crate::backend::operation::TaskDirtyCause;
@@ -89,13 +89,13 @@ const DEPENDENT_TASKS_DIRTY_PARALLIZATION_THRESHOLD: usize = 10000;
 const SNAPSHOT_REQUESTED_BIT: usize = 1 << (usize::BITS - 1);
 
 /// Configurable idle timeout for snapshot persistence.
-/// Defaults to 2 seconds if not set or if the value is invalid.
+/// Defaults to 10 seconds if not set or if the value is invalid.
 static IDLE_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
     std::env::var("TURBO_ENGINE_SNAPSHOT_IDLE_TIMEOUT_MILLIS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .map(Duration::from_millis)
-        .unwrap_or(Duration::from_secs(2))
+        .unwrap_or(Duration::from_secs(10))
 });
 
 struct SnapshotRequest {
@@ -242,11 +242,11 @@ impl<B: BackingStorage> TurboTasksBackend<B> {
     /// This is exposed for integration tests that need to verify the
     /// snapshot → evict → restore cycle works correctly.
     ///
-    /// Returns `(snapshot_had_new_data, full_evicted, data_only_evicted)`.
+    /// Returns `(snapshot_had_new_data, eviction_counts)`.
     pub fn snapshot_and_evict(
         &self,
         turbo_tasks: &dyn TurboTasksBackendApi<TurboTasksBackend<B>>,
-    ) -> (bool, usize, usize) {
+    ) -> (bool, EvictionCounts) {
         self.0.snapshot_and_evict(turbo_tasks)
     }
 }
@@ -389,19 +389,27 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
     /// This is exposed for integration tests that need to verify the
     /// snapshot → evict → restore cycle works correctly.
     ///
-    /// Returns `(snapshot_had_new_data, full_evicted, data_only_evicted)`.
+    /// Returns `(snapshot_had_new_data, eviction_counts)`.
     pub fn snapshot_and_evict(
         &self,
         turbo_tasks: &dyn TurboTasksBackendApi<TurboTasksBackend<B>>,
-    ) -> (bool, usize, usize) {
+    ) -> (bool, EvictionCounts) {
         assert!(
             self.should_persist(),
             "snapshot_and_evict requires persistence"
         );
         let snapshot_result = self.snapshot_and_persist(None, "test", turbo_tasks);
-        let had_new_data = snapshot_result.map_or(false, |(_, new_data)| new_data);
-        let (full, data_only) = self.storage.evict_after_snapshot();
-        (had_new_data, full, data_only)
+        let had_new_data = match snapshot_result {
+            Some((_, new_data)) => new_data,
+            None => {
+                // Snapshot/persist failed — skip eviction since the data may not
+                // be on disk yet. Evicting now could lose in-memory state that
+                // can't be restored.
+                return (false, EvictionCounts::default());
+            }
+        };
+        let counts = self.storage.evict_after_snapshot();
+        (had_new_data, counts)
     }
 
     fn should_restore(&self) -> bool {
@@ -815,6 +823,9 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                 .entered();
                 let mut queue = LeafDistanceUpdateQueue::new();
                 let reader = reader.unwrap();
+                if reader.is_transient() {
+                    task.set_has_transient_cell_or_output_dependents(true);
+                }
                 if task.add_output_dependent(reader) {
                     // Ensure that dependent leaf distance is strictly monotonic increasing
                     let leaf_distance = task.get_leaf_distance().copied().unwrap_or_default();
@@ -902,6 +913,9 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                 && (!task.immutable() || cfg!(feature = "verify_immutable"))
             {
                 let reader = reader.unwrap();
+                if reader.is_transient() {
+                    task.set_has_transient_cell_or_output_dependents(true);
+                }
                 let _ = task.add_cell_dependents((cell, key, reader));
                 drop(task);
 
@@ -2771,6 +2785,8 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                     let mut last_snapshot = self.start_time + Duration::from_millis(last_snapshot);
                     let mut idle_start_listener = self.idle_start_event.listen();
                     let mut idle_end_listener = self.idle_end_event.listen();
+                    // Whether to immediately set an idle timeout if possible
+                    // set to false if we don't persist anything in a cycle.
                     let mut fresh_idle = true;
                     loop {
                         const FIRST_SNAPSHOT_WAIT: Duration = Duration::from_secs(300);
@@ -2805,7 +2821,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                                         idle_start_listener = self.idle_start_event.listen()
                                     },
                                     _ = &mut idle_end_listener => {
-                                        idle_time = until + idle_timeout;
+                                        idle_time = far_future();
                                         idle_end_listener = self.idle_end_event.listen()
                                     },
                                     _ = tokio::time::sleep_until(until) => {
@@ -2836,17 +2852,35 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                             // Like compaction, this runs after snapshot_and_persist
                             // as a separate concern.
 
-                            if this.should_evict() {
-                                let evict_span = tracing::info_span!(
-                                    parent: background_span.id(),
-                                    "evict tasks",
-                                    full = tracing::field::Empty,
-                                    data_only = tracing::field::Empty,
-                                );
-                                let _guard = evict_span.enter();
-                                let (full, data_only) = this.storage.evict_after_snapshot();
-                                evict_span.record("full", full);
-                                evict_span.record("data_only", data_only);
+                            // TODO: should we only run if we stored new data? syncing data to disk
+                            // implies that some of it is eligible for eviction, but if nothing was
+                            // stored then that isn't true.   on the other hand pre-fetching might
+                            // bring unused data into the heap.
+                            if this.should_evict() && new_data {
+                                let idle_ended = tokio::select! {
+                                    biased;
+                                    _ = &mut idle_end_listener => {
+                                        idle_end_listener = self.idle_end_event.listen();
+                                        true
+                                    },
+                                    _ = std::future::ready(()) => false,
+                                };
+                                if !idle_ended {
+                                    let evict_span = tracing::info_span!(
+                                        parent: background_span.id(),
+                                        "evict tasks",
+                                        full = tracing::field::Empty,
+                                        data_and_meta = tracing::field::Empty,
+                                        data_only = tracing::field::Empty,
+                                        meta_only = tracing::field::Empty,
+                                    );
+                                    let _guard = evict_span.enter();
+                                    let counts = this.storage.evict_after_snapshot();
+                                    evict_span.record("full", counts.full);
+                                    evict_span.record("data_and_meta", counts.data_and_meta);
+                                    evict_span.record("data_only", counts.data_only);
+                                    evict_span.record("meta_only", counts.meta_only);
+                                }
                             }
 
                             // Compact while idle (up to limit), regardless of
@@ -2973,6 +3007,9 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                 }
             }
             if let Some(reader_id) = reader_id {
+                if reader_id.is_transient() {
+                    task.set_has_transient_upper_or_collectibles_dependents(true);
+                }
                 let _ = task.add_collectibles_dependents((collectible_type, reader_id));
             }
         }

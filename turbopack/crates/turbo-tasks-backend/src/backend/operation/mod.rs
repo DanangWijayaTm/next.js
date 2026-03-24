@@ -1140,7 +1140,7 @@ impl_operation!(LeafDistanceUpdate leaf_distance_update::LeafDistanceUpdateQueue
 pub use self::invalidate::TaskDirtyCause;
 pub use self::{
     aggregation_update::{
-        AggregatedDataUpdate, AggregationUpdateJob, ComputeDirtyAndCleanUpdate, LEAF_NUMBER,
+        AggregatedDataUpdate, AggregationUpdateJob, ComputeDirtyAndCleanUpdate,
         get_aggregation_number, get_uppers, is_aggregating_node, is_root_node,
     },
     cleanup_old_edges::OutdatedEdge,
