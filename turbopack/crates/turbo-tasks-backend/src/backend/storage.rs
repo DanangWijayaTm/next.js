@@ -150,11 +150,11 @@ impl Storage {
     ) -> Vec<SnapshotShard<'l, P>> {
         let guard = Arc::new(guard);
 
-        let shards_with_index: Vec<_> = self.map.shards().iter().enumerate().collect();
+        let shards: Vec<_> = self.map.shards().iter().enumerate().collect();
 
         // The number of shards is much larger than the number of threads, so the effect of the
         // locks held is negligible.
-        parallel::map_collect::<_, _, Vec<_>>(&shards_with_index, |&(shard_idx, shard)| {
+        parallel::map_collect::<_, _, Vec<_>>(&shards, |&(shard_idx, shard)| {
             // Skip shards with no modifications. The count is approximate (not synchronized
             // with flag clearing), but false positives just mean we scan an extra shard.
             if self.shard_modified_counts[shard_idx].load(Ordering::Relaxed) == 0 {

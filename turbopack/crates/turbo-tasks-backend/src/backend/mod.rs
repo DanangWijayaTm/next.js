@@ -1268,9 +1268,15 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             };
             let task_type_hash = if inner.flags.new_task() {
                 let Some(task_type) = inner.get_persistent_task_type() else {
-                    // This implies that a task was allocated but not yet connected to its task_type
-                    // before getting persisted.  This should be nearly impossible.
-                    return None;
+                    // This implies that a task was allocated but not yet connected to its
+                    // task_type before getting snapshotted. This should be nearly impossible.
+                    // Return an empty item which will be filtered out downstream.
+                    return SnapshotItem {
+                        task_id,
+                        meta: None,
+                        data: None,
+                        task_type_hash: None,
+                    };
                 };
                 Some(compute_task_type_hash(task_type))
             } else {
