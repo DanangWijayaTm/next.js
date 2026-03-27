@@ -237,13 +237,10 @@ impl<'e, B: BackingStorage> ExecuteContextImpl<'e, B> {
             .into_iter()
             .filter(|&(id, category)| {
                 if id.is_transient() {
+                    // Transient tasks don't need DB restoration (restored flags are
+                    // set at allocation time), so just invoke the callback directly.
                     if call_prepared_task_callback_for_transient_tasks {
-                        let mut task = self.backend.storage.access_mut(id);
-                        // TODO add is_restoring and avoid concurrent restores and duplicates tasks
-                        // ids in `task_ids`
-                        if !task.flags.is_restored(category) {
-                            task.flags.set_restored(TaskDataCategory::All);
-                        }
+                        let task = self.backend.storage.access_mut(id);
                         prepared_task_callback(self, id, category, task);
                     }
                     false
@@ -393,40 +390,43 @@ impl<'e, B: BackingStorage> ExecuteContext<'e> for ExecuteContextImpl<'e, B> {
 
         let mut task = self.backend.storage.access_mut(task_id);
         if !task.flags.is_restored(category) {
-            if task_id.is_transient() {
-                task.flags.set_restored(TaskDataCategory::All);
-            } else {
-                // Collect which categories need restoring while we have the lock
-                let needs_data =
-                    category.includes_data() && !task.flags.is_restored(TaskDataCategory::Data);
-                let needs_meta =
-                    category.includes_meta() && !task.flags.is_restored(TaskDataCategory::Meta);
+            // New tasks (transient and persistent) have restored flags set at allocation
+            // time, so this path is only hit for persistent tasks being restored from DB.
+            debug_assert!(
+                !task_id.is_transient(),
+                "transient task should already be restored"
+            );
 
-                if needs_data || needs_meta {
-                    // Avoid holding the lock too long since this can also affect other tasks
-                    // Drop lock once, do all I/O, then re-acquire once
-                    drop(task);
+            // Collect which categories need restoring while we have the lock
+            let needs_data =
+                category.includes_data() && !task.flags.is_restored(TaskDataCategory::Data);
+            let needs_meta =
+                category.includes_meta() && !task.flags.is_restored(TaskDataCategory::Meta);
 
-                    let storage_data = needs_data
-                        .then(|| self.restore_task_data(task_id, SpecificTaskDataCategory::Data));
-                    let storage_meta = needs_meta
-                        .then(|| self.restore_task_data(task_id, SpecificTaskDataCategory::Meta));
+            if needs_data || needs_meta {
+                // Avoid holding the lock too long since this can also affect other tasks
+                // Drop lock once, do all I/O, then re-acquire once
+                drop(task);
 
-                    task = self.backend.storage.access_mut(task_id);
+                let storage_data = needs_data
+                    .then(|| self.restore_task_data(task_id, SpecificTaskDataCategory::Data));
+                let storage_meta = needs_meta
+                    .then(|| self.restore_task_data(task_id, SpecificTaskDataCategory::Meta));
 
-                    // Handle race conditions and merge
-                    if let Some(storage) = storage_data
-                        && !task.flags.is_restored(TaskDataCategory::Data)
-                    {
-                        task.restore_from(storage, TaskDataCategory::Data);
-                        task.flags.set_restored(TaskDataCategory::Data);
-                    }
-                    if let Some(storage) = storage_meta
-                        && !task.flags.is_restored(TaskDataCategory::Meta)
-                    {
-                        task.restore_from(storage, TaskDataCategory::Meta);
-                        task.flags.set_restored(TaskDataCategory::Meta);
-                    }
+                task = self.backend.storage.access_mut(task_id);
+
+                // Handle race conditions and merge
+                if let Some(storage) = storage_data
+                    && !task.flags.is_restored(TaskDataCategory::Data)
+                {
+                    task.restore_from(storage, TaskDataCategory::Data);
+                    task.flags.set_restored(TaskDataCategory::Data);
+                }
+                if let Some(storage) = storage_meta
+                    && !task.flags.is_restored(TaskDataCategory::Meta)
+                {
+                    task.restore_from(storage, TaskDataCategory::Meta);
+                    task.flags.set_restored(TaskDataCategory::Meta);
                 }
             }
         }
@@ -715,35 +715,6 @@ pub trait TaskGuard: Debug + TaskStorageAccessors {
             self.set_aggregated_current_session_clean_container_count(new_value);
         }
         new_value
-    }
-
-    /// Initialize a new task with the given cacheable task type.
-    ///
-    /// Sets the persistent task type (which identifies the task type for caching,
-    /// regardless of whether the task itself is transient or persistent).
-    ///
-    /// For persistent tasks, also marks the task as new/modified/restored so it
-    /// gets written to the backing storage. For transient tasks, only the task
-    /// type is set (no persistence tracking needed).
-    fn init_new_task(&mut self, task_type: Arc<CachedTaskType>) {
-        // Set the task type directly on the storage, bypassing the generated setter
-        // which would call track_modification before the field is set (causing an
-        // early return since persistent_task_type is still None). We then explicitly
-        // track both categories after the field is set.
-        self.typed_mut().set_persistent_task_type(task_type);
-        let is_transient = self.id().is_transient();
-        // mark as restored so we don't do db queries for it
-        let flags = &mut self.typed_mut().flags;
-        flags.set_restored(TaskDataCategory::All);
-        if !is_transient {
-            // mark as `new` so it gets written to the task cache
-            flags.set_new_persistent_task(true);
-            self.track_modification(SpecificTaskDataCategory::Data, "init_new_task");
-            // Calling track_modification for Meta is potentially wasteful, but it would be
-            // unusual to have data with no meta, so we can eagerly set this and at worst
-            // serialize a very small bit of data in the Meta table.
-            self.track_modification(SpecificTaskDataCategory::Meta, "init_new_task");
-        }
     }
 
     fn invalidate_serialization(&mut self);

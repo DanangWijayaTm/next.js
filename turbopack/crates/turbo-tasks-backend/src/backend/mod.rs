@@ -1266,12 +1266,13 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             } else {
                 None
             };
-            let task_type_hash = if inner.flags.new_persistent_task() {
-                Some(compute_task_type_hash(
-                    inner
-                        .get_persistent_task_type()
-                        .expect("if new_persistent_task is set the task_type must also be set"),
-                ))
+            let task_type_hash = if inner.flags.new_task() {
+                let Some(task_type) = inner.get_persistent_task_type() else {
+                    // This implies that a task was allocated but not yet connected to its task_type
+                    // before getting persisted.  This should be nearly impossible.
+                    return None;
+                };
+                Some(compute_task_type_hash(task_type))
             } else {
                 None
             };
@@ -1557,6 +1558,13 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                     // We're creating a new task.
                     let task_type = Arc::new(task_type);
                     let task_id = self.persisted_task_id_factory.get();
+                    {
+                        // Mark as restored so we don't do db queries for it, and
+                        // as new so it gets written to the task cache.
+                        let mut task = self.storage.access_mut(task_id);
+                        task.flags.set_restored(TaskDataCategory::All);
+                        task.flags.set_new_task(true);
+                    }
                     e.insert(task_type.clone(), task_id);
                     // insert() consumes e, releasing the lock
                     self.track_cache_miss(&task_type);
@@ -1628,6 +1636,13 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             RawEntry::Vacant(e) => {
                 let task_type = Arc::new(task_type);
                 let task_id = self.transient_task_id_factory.get();
+                {
+                    // Mark as restored so we don't do db queries for it, and
+                    // as new so it gets written to the task cache.
+                    let mut task = self.storage.access_mut(task_id);
+                    task.flags.set_restored(TaskDataCategory::All);
+                    task.flags.set_new_task(true);
+                }
                 e.insert(task_type.clone(), task_id);
                 self.track_cache_miss(&task_type);
 
