@@ -194,6 +194,12 @@ program
     '--experimental-cpu-prof',
     'Enable CPU profiling. Profile is saved to .next/cpu-profiles/ on completion.'
   )
+  .addOption(
+    new Option(
+      '--turbopack-daemon <socketPath>',
+      'Internal: connect to turbopack daemon'
+    ).hideHelp()
+  )
   .action((directory: string, options: NextBuildOptions) => {
     if (options.debugPrerender) {
       // @ts-expect-error not readonly
@@ -208,6 +214,16 @@ program
       const { join } = require('path') as typeof import('path')
       const dir = directory || process.cwd()
       process.env.NEXT_CPU_PROF_DIR = join(dir, '.next', 'cpu-profiles')
+    }
+
+    // Multi-project detection: parse raw argv for --project groups
+    const { parseProjectGroups } =
+      require('../lib/multi-project') as typeof import('../lib/multi-project')
+    const projects = parseProjectGroups(process.argv)
+    if (projects.length >= 2) {
+      return import('../lib/multi-project.js').then((mod) =>
+        mod.runMultiProject('build', projects)
+      )
     }
 
     // ensure process exits after build completes so open handles/connections
@@ -327,6 +343,12 @@ program
     '--experimental-cpu-prof',
     'Enable CPU profiling. Profiles are saved to .next/cpu-profiles/ on exit.'
   )
+  .addOption(
+    new Option(
+      '--turbopack-daemon <socketPath>',
+      'Internal: connect to turbopack daemon'
+    ).hideHelp()
+  )
   .action(
     (directory: string, options: NextDevOptions, { _optionValueSources }) => {
       if (options.experimentalNextConfigStripTypes) {
@@ -339,6 +361,17 @@ program
         const dir = directory || process.cwd()
         process.env.NEXT_CPU_PROF_DIR = join(dir, '.next', 'cpu-profiles')
       }
+
+      // Multi-project detection: parse raw argv for --project groups
+      const { parseProjectGroups } =
+        require('../lib/multi-project') as typeof import('../lib/multi-project')
+      const projects = parseProjectGroups(process.argv)
+      if (projects.length >= 2) {
+        return import('../lib/multi-project.js').then((mod) =>
+          mod.runMultiProject('dev', projects)
+        )
+      }
+
       const portSource = _optionValueSources.port
       import('../cli/next-dev.js').then((mod) =>
         mod.nextDev(options, portSource, directory)
@@ -571,5 +604,15 @@ internal
       .then(() => process.exit(0))
   })
   .usage('[directory] [options]')
+
+internal
+  .command('turbopack-daemon', { hidden: true })
+  .description('Internal: run the shared Turbopack daemon process.')
+  .argument('<socketPath>', 'The socket path to listen on.')
+  .action((socketPath: string) => {
+    return import('../cli/internal/turbopack-daemon.js').then((mod) =>
+      mod.runTurbopackDaemon(socketPath)
+    )
+  })
 
 program.parse(process.argv)

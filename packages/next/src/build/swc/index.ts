@@ -1232,7 +1232,8 @@ function bindingToApi(
   return async function createProject(
     options: ProjectOptions,
     turboEngineOptions,
-    callbacks?: import('./types').TurbopackProjectCallbacks
+    callbacks?: import('./types').TurbopackProjectCallbacks,
+    daemon?: { __napiType: 'DaemonHandle' }
   ) {
     return new ProjectImpl(
       await binding.projectNew(
@@ -1243,7 +1244,8 @@ function bindingToApi(
             require('../../shared/lib/turbopack/internal-error') as typeof import('../../shared/lib/turbopack/internal-error')
           ).throwTurbopackInternalError,
           onBeforeDeferredEntries: callbacks?.onBeforeDeferredEntries,
-        }
+        },
+        daemon
       )
     )
   }
@@ -1630,6 +1632,12 @@ function loadNative(importPath?: string): Binding {
           customBindingsPath ?? bindingsPath!,
           false
         ),
+        startTurbopackDaemon(socketPath: string) {
+          return (customBindings ?? bindings).startTurbopackDaemon(socketPath)
+        },
+        connectTurbopackDaemon(socketPath: string) {
+          return (customBindings ?? bindings).connectTurbopackDaemon(socketPath)
+        },
         startTurbopackTraceServer(traceFilePath, port) {
           Log.warn(
             `Turbopack trace server started. View trace at https://trace.nextjs.org${port != null ? `?port=${port}` : ''}`
