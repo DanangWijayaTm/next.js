@@ -1558,13 +1558,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
                     // We're creating a new task.
                     let task_type = Arc::new(task_type);
                     let task_id = self.persisted_task_id_factory.get();
-                    {
-                        // Mark as restored so we don't do db queries for it, and
-                        // as new so it gets written to the task cache.
-                        let mut task = self.storage.access_mut(task_id);
-                        task.flags.set_restored(TaskDataCategory::All);
-                        task.flags.set_new_task(true);
-                    }
+                    self.storage.initialize_new_task(task_id);
                     e.insert(task_type.clone(), task_id);
                     // insert() consumes e, releasing the lock
                     self.track_cache_miss(&task_type);
@@ -1636,13 +1630,7 @@ impl<B: BackingStorage> TurboTasksBackendInner<B> {
             RawEntry::Vacant(e) => {
                 let task_type = Arc::new(task_type);
                 let task_id = self.transient_task_id_factory.get();
-                {
-                    // Mark as restored so we don't do db queries for it, and
-                    // as new so it gets written to the task cache.
-                    let mut task = self.storage.access_mut(task_id);
-                    task.flags.set_restored(TaskDataCategory::All);
-                    task.flags.set_new_task(true);
-                }
+                self.storage.initialize_new_task(task_id);
                 e.insert(task_type.clone(), task_id);
                 self.track_cache_miss(&task_type);
 

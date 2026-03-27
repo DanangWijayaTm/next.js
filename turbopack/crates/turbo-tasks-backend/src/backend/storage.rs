@@ -119,6 +119,14 @@ impl Storage {
         self.map.determine_shard(hash)
     }
 
+    /// Mark a newly allocated task as restored (skip DB queries) and new (include in persistence
+    /// snapshots).
+    pub fn initialize_new_task(&self, task_id: TaskId) {
+        let mut task = self.access_mut(task_id);
+        task.flags.set_restored(TaskDataCategory::All);
+        task.flags.set_new_task(true);
+    }
+
     /// Processes every modified item (resp. a snapshot of it) with the given function and returns
     /// the results. Ends snapshot mode when the returned `SnapshotGuard` (held by each shard) is
     /// dropped.
