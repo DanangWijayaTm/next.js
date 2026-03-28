@@ -634,7 +634,7 @@ impl ChunkingContext for BrowserChunkingContext {
         let content_hash = content_hash.await?;
         let ContentHashing::Direct { length } = self.asset_content_hashing;
         let short_hash = &content_hash[..length as usize];
-        let asset_path = match source_path.extension_ref() {
+        let asset_path = match source_path.extension() {
             Some(ext) => format!(
                 "{basename}.{short_hash}.{ext}",
                 basename = &basename[..basename.len() - ext.len() - 1],
