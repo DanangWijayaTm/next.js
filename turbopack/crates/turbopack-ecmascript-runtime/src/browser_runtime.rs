@@ -25,6 +25,7 @@ pub async fn get_browser_runtime_code(
     output_root_to_root_path: RcStr,
     generate_source_map: bool,
     chunk_loading_global: Vc<RcStr>,
+    esm_chunks: bool,
 ) -> Result<Vc<Code>> {
     let asset_context = *get_runtime_asset_context(*environment)
         .to_resolved()
@@ -69,11 +70,19 @@ pub async fn get_browser_runtime_code(
             panic!("Node.js runtime is not supported in the browser runtime!")
         }
         (ChunkLoading::Dom, RuntimeType::Development) => {
-            runtime_backend_code.push("browser/runtime/dom/runtime-backend-dom.ts");
+            runtime_backend_code.push(if esm_chunks {
+                "browser/runtime/dom/runtime-backend-dom-esm.ts"
+            } else {
+                "browser/runtime/dom/runtime-backend-dom.ts"
+            });
             runtime_backend_code.push("browser/runtime/dom/dev-backend-dom.ts");
         }
         (ChunkLoading::Dom, RuntimeType::Production) => {
-            runtime_backend_code.push("browser/runtime/dom/runtime-backend-dom.ts");
+            runtime_backend_code.push(if esm_chunks {
+                "browser/runtime/dom/runtime-backend-dom-esm.ts"
+            } else {
+                "browser/runtime/dom/runtime-backend-dom.ts"
+            });
         }
 
         #[cfg(feature = "test")]
@@ -94,15 +103,29 @@ pub async fn get_browser_runtime_code(
         code,
         r#"
             (() => {{
-            if (!Array.isArray(globalThis[{}])) {{
-                return;
-            }}
+        "#,
+    )?;
+    if !esm_chunks {
+        // In classic script mode the IIFE bails out if TURBOPACK is not yet an array
+        // (i.e., a second evaluate chunk ran before the first finished bootstrapping).
+        writedoc!(
+            code,
+            r#"
+                if (!Array.isArray(globalThis[{}])) {{
+                    return;
+                }}
 
+            "#,
+            StringifyJs(&chunk_loading_global),
+        )?;
+    }
+    writedoc!(
+        code,
+        r#"
             const CHUNK_BASE_PATH = {};
             const RELATIVE_ROOT_PATH = {};
             const RUNTIME_PUBLIC_PATH = {};
         "#,
-        StringifyJs(&chunk_loading_global),
         StringifyJs(chunk_base_path),
         StringifyJs(relative_root_path.as_str()),
         StringifyJs(chunk_base_path),
@@ -204,25 +227,37 @@ pub async fn get_browser_runtime_code(
 
     // Registering chunks and chunk lists depends on the BACKEND variable, which is set by the
     // specific runtime code, hence it must be appended after it.
-    writedoc!(
-        code,
-        r#"
-            const chunksToRegister = globalThis[{chunk_loading_global}];
-            globalThis[{chunk_loading_global}] = {{ push: registerChunk }};
-            chunksToRegister.forEach(registerChunk);
-        "#,
-        chunk_loading_global = StringifyJs(&chunk_loading_global),
-    )?;
-    if matches!(runtime_type, RuntimeType::Development) {
+    if esm_chunks {
+        // ESM mode: the RuntimeParams are in __turbopack_params__ (a const defined before
+        // the runtime IIFE in the same evaluate chunk file). No TURBOPACK global to drain.
+        // Pass an empty string as the chunk path — the ESM registerChunk ignores it.
         writedoc!(
             code,
             r#"
-            const chunkListsToRegister = globalThis[{chunk_lists_global}] || [];
-            globalThis[{chunk_lists_global}] = {{ push: registerChunkList }};
-            chunkListsToRegister.forEach(registerChunkList);
-        "#,
-            chunk_lists_global = StringifyJs(&chunk_lists_global),
+                BACKEND.registerChunk("", __turbopack_params__);
+            "#,
         )?;
+    } else {
+        writedoc!(
+            code,
+            r#"
+                const chunksToRegister = globalThis[{chunk_loading_global}];
+                globalThis[{chunk_loading_global}] = {{ push: registerChunk }};
+                chunksToRegister.forEach(registerChunk);
+            "#,
+            chunk_loading_global = StringifyJs(&chunk_loading_global),
+        )?;
+        if matches!(runtime_type, RuntimeType::Development) {
+            writedoc!(
+                code,
+                r#"
+                const chunkListsToRegister = globalThis[{chunk_lists_global}] || [];
+                globalThis[{chunk_lists_global}] = {{ push: registerChunkList }};
+                chunkListsToRegister.forEach(registerChunkList);
+            "#,
+                chunk_lists_global = StringifyJs(&chunk_lists_global),
+            )?;
+        }
     }
     writedoc!(
         code,
