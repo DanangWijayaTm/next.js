@@ -1451,13 +1451,6 @@ function _async_to_generator(fn) {
         });
     };
 }
-function _instanceof(left, right) {
-    if (right != null && typeof Symbol !== "undefined" && right[Symbol.hasInstance]) {
-        return !!right[Symbol.hasInstance](left);
-    } else {
-        return left instanceof right;
-    }
-}
 function _ts_generator(thisArg, body) {
     var f, y, t, _ = {
         label: 0,
@@ -1751,17 +1744,6 @@ var BACKEND;
             } else if (isJs(chunkUrl)) {
                 self.TURBOPACK_NEXT_CHUNK_URLS.push(chunkUrl);
                 importScripts(chunkUrl);
-            } else {
-                throw new Error(`can't infer type of chunk from URL ${chunkUrl} in worker`);
-            }
-        } else if (typeof WorkerGlobalScope !== 'undefined' && _instanceof(self, WorkerGlobalScope)) {
-            // We're in a module web worker (importScripts is not allowed)
-            if (isCss(chunkUrl)) {
-            // ignore
-            } else if (isJs(chunkUrl)) {
-                import(chunkUrl).catch(function(err) {
-                    return resolver.reject(err);
-                });
             } else {
                 throw new Error(`can't infer type of chunk from URL ${chunkUrl} in worker`);
             }
