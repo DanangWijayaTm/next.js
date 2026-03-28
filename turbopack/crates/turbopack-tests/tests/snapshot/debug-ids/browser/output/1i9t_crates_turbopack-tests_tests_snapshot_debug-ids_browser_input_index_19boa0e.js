@@ -1,4 +1,4 @@
-;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="ee913db1-fffb-2401-85b1-2bad1e18db32")}catch(e){}}();
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="6f4a4cff-3098-cc71-d8de-171eeb1a344d")}catch(e){}}();
 (globalThis["TURBOPACK"] || (globalThis["TURBOPACK"] = [])).push([
     "output/1i9t_crates_turbopack-tests_tests_snapshot_debug-ids_browser_input_index_19boa0e.js",
     {"otherChunks":["output/1do3_crates_turbopack-tests_tests_snapshot_debug-ids_browser_input_index_03ibyvs.js"],"runtimeModuleIds":["[project]/turbopack/crates/turbopack-tests/tests/snapshot/debug-ids/browser/input/index.js [test] (ecmascript)"]}
@@ -2058,7 +2058,7 @@ let BACKEND;
             if (isCss(chunkUrl)) {
             // ignore
             } else if (isJs(chunkUrl)) {
-                import(chunkUrl).catch(()=>resolver.reject());
+                import(chunkUrl).catch((err)=>resolver.reject(err));
             } else {
                 throw new Error(`can't infer type of chunk from URL ${chunkUrl} in worker`);
             }
@@ -2221,5 +2221,5 @@ chunkListsToRegister.forEach(registerChunkList);
 })();
 
 
-//# debugId=ee913db1-fffb-2401-85b1-2bad1e18db32
+//# debugId=6f4a4cff-3098-cc71-d8de-171eeb1a344d
 //# sourceMappingURL=1do3_crates_turbopack-tests_tests_snapshot_debug-ids_browser_input_index_19boa0e.js.map
