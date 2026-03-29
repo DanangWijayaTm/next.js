@@ -54,9 +54,7 @@ function computeCacheKey(outputPath, flags) {
   hash.update('link-cache-v1\0')
   hash.update(outputName + '\0')
   // Sort flags for determinism (exclude -L paths which vary per machine)
-  const stableFlags = flags
-    .filter((f) => !f.startsWith('-L'))
-    .sort()
+  const stableFlags = flags.filter((f) => !f.startsWith('-L')).sort()
   hash.update(stableFlags.join('\0'))
   return hash.digest('hex')
 }
