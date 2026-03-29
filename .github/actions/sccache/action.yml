@@ -27,6 +27,15 @@ runs:
         echo "SCCACHE_BASE_DIR=${{ inputs.base-dir || github.workspace }}" >> $GITHUB_ENV
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+        # Extract the real linker from cargo's resolved flags before we override it.
+        # cargo-rustflags merges .cargo/config.toml + RUSTFLAGS + --config overlays.
+        REAL_LINKER=$(cargo rustflags 2>/dev/null | grep -o '\-Clinker=[^ ]*' | tail -1 | sed 's/-Clinker=//' || echo "")
+        if [ -z "$REAL_LINKER" ]; then
+          # No -Clinker in flags — rustc uses its default (cc on Linux, rust-lld elsewhere)
+          REAL_LINKER=""
+        fi
+        echo "CACHED_LINKER_REAL=${REAL_LINKER}" >> $GITHUB_ENV
+
         # Override the linker with our caching wrapper. Appends to existing
         # RUSTFLAGS — last -Clinker= wins over .cargo/config.toml's setting.
         CACHED_LINKER="${{ github.workspace }}/scripts/cached-linker"

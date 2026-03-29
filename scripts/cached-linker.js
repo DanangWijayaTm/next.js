@@ -19,26 +19,14 @@ const fs = require('fs')
 
 const args = process.argv.slice(2)
 
-// Find the real linker that rustc would have used without our override.
-// On Linux: rustc uses `cc` as the linker driver (gnu-cc flavor) with -fuse-ld=lld
-// On macOS: rustc uses `rust-lld` directly (ld64.lld flavor)
-// On Windows: rustc uses `rust-lld` directly (lld-link flavor)
+// Find the real linker from CACHED_LINKER_REAL env var.
+// Set by the sccache action before overriding -Clinker=.
 function findRealLinker() {
-  if (process.platform === 'linux') {
-    // Linux: rustc default is `cc` (gcc/clang driver that calls lld via -fuse-ld)
-    return 'cc'
+  if (process.env.CACHED_LINKER_REAL) {
+    return process.env.CACHED_LINKER_REAL
   }
-  // macOS/Windows: use rust-lld from sysroot
-  try {
-    const sysroot = execSync('rustc --print sysroot', { encoding: 'utf-8' }).trim()
-    const hostTriple = execSync('rustc -vV', { encoding: 'utf-8' })
-      .match(/host: (.+)/)?.[1]
-      ?.trim()
-    if (hostTriple) {
-      const lld = path.join(sysroot, 'lib', 'rustlib', hostTriple, 'bin', 'rust-lld')
-      if (fs.existsSync(lld)) return lld
-    }
-  } catch {}
+  // Fallback: platform default
+  if (process.platform === 'linux') return 'cc'
   return 'rust-lld'
 }
 
