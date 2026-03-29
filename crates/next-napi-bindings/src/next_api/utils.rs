@@ -79,9 +79,7 @@ pub struct RootTask {
     task_id: Option<TaskId>,
     /// When set, this root task was created via the daemon IPC path.
     /// Disposing it sends a CancelSubscription to the daemon.
-    #[allow(dead_code)]
     remote_client: Option<next_api::ipc::client::DaemonClient>,
-    #[allow(dead_code)]
     remote_callback_id: Option<next_api::ipc::protocol::CallbackId>,
 }
 
@@ -97,6 +95,9 @@ impl RootTask {
     }
 
     /// Create a remote (daemon-backed) root task.
+    ///
+    /// Currently unused — will be called once subscription forwarding
+    /// is implemented in the NAPI layer.
     #[allow(dead_code)]
     pub fn remote(
         client: next_api::ipc::client::DaemonClient,
@@ -113,7 +114,9 @@ impl RootTask {
 
 impl Drop for RootTask {
     fn drop(&mut self) {
-        // TODO stop the root task
+        // Intentionally a no-op. JavaScript must call `root_task_dispose`
+        // explicitly (in a try/finally block). We cannot await async
+        // operations inside Drop.
     }
 }
 
