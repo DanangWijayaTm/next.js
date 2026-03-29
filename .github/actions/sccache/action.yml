@@ -36,14 +36,15 @@ runs:
           CACHED_LINKER="${{ github.workspace }}/scripts/cached-linker.cmd"
         fi
 
-        # Get the full resolved flags and extract the real linker
-        RESOLVED_FLAGS=$(cargo rustflags 2>/dev/null || echo "")
-        REAL_LINKER=$(echo "$RESOLVED_FLAGS" | grep -o '\-Clinker=[^ ]*' | tail -1 | sed 's/-Clinker=//' || echo "")
+        # Get all resolved flags (one per line) and extract the real linker.
+        # cargo rustflags --list merges .cargo/config.toml + env RUSTFLAGS.
+        RESOLVED_FLAGS=$(cargo rustflags --list 2>/dev/null || echo "")
+        REAL_LINKER=$(echo "$RESOLVED_FLAGS" | grep '^-Clinker=' | tail -1 | sed 's/^-Clinker=//' || echo "")
         echo "CACHED_LINKER_REAL=${REAL_LINKER}" >> $GITHUB_ENV
 
-        # Set RUSTFLAGS to the full resolved flags + our linker override.
-        # This replaces both the env RUSTFLAGS and config.toml rustflags.
-        echo "RUSTFLAGS=${RESOLVED_FLAGS} -Clinker=${CACHED_LINKER}" >> $GITHUB_ENV
+        # Join flags back into a single line, append our linker override.
+        JOINED_FLAGS=$(echo "$RESOLVED_FLAGS" | tr '\n' ' ')
+        echo "RUSTFLAGS=${JOINED_FLAGS}-Clinker=${CACHED_LINKER}" >> $GITHUB_ENV
 
     - name: Start sccache proxy
       if: ${{ inputs.mode == 'start' }}
