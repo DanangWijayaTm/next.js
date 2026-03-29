@@ -206,4 +206,24 @@ describe('server-hmr', () => {
       }
     )
   })
+
+  describe('metadata route hmr', () => {
+    itTurbopackDev('reflects manifest.ts changes on fetch', async () => {
+      const initial = await next
+        .fetch('/manifest.webmanifest')
+        .then((res) => res.json())
+      expect(initial.name).toBe('My App v1')
+
+      await next.patchFile('app/manifest.ts', (content) =>
+        content.replace('My App v1', 'My App v2')
+      )
+
+      await retry(async () => {
+        const updated = await next
+          .fetch('/manifest.webmanifest')
+          .then((res) => res.json())
+        expect(updated.name).toBe('My App v2')
+      })
+    })
+  })
 })
