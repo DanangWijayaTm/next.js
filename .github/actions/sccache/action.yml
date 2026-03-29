@@ -104,3 +104,8 @@ runs:
           echo "=== proxy log: GET results ==="
           grep ' GET ' "$LOGF" | sed 's/.* -> //' | sort | uniq -c | sort -rn || true
         fi
+        # Show cached linker log
+        if [ -f ${RUNNER_TEMP}/cached-linker.log ]; then
+          echo "=== cached linker log ==="
+          cat ${RUNNER_TEMP}/cached-linker.log
+        fi

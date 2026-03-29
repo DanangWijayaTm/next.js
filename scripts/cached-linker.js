@@ -16,8 +16,19 @@ const { execFileSync, execSync } = require('child_process')
 const { createHash } = require('crypto')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 
 const args = process.argv.slice(2)
+
+// Log file for diagnostics (printed by sccache stop step)
+const LOG_FILE = path.join(
+  process.env.RUNNER_TEMP || os.tmpdir(),
+  'cached-linker.log'
+)
+
+function log(msg) {
+  fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`)
+}
 
 // Find the real linker from CACHED_LINKER_REAL env var.
 // Set by the sccache action before overriding -Clinker=.
@@ -61,10 +72,12 @@ function computeCacheKey(outputPath, flags) {
 
 async function main() {
   const { outputPath, flags } = parseArgs()
+  const outputName = outputPath ? path.basename(outputPath) : '(unknown)'
 
   // No output path or no token — just run the real linker
   if (!outputPath || !process.env.TURBO_TOKEN) {
     const linker = findRealLinker()
+    log(`PASSTHROUGH ${outputName} (${!outputPath ? 'no -o' : 'no token'})`)
     execFileSync(linker, args, { stdio: 'inherit' })
     return
   }
@@ -74,8 +87,9 @@ async function main() {
   let cache
   try {
     cache = await import('./turbo-cache.mjs')
-  } catch {
+  } catch (e) {
     // turbo-cache not available — fall through to real linker
+    log(`PASSTHROUGH ${outputName} (turbo-cache import failed: ${e.message})`)
     const linker = findRealLinker()
     execFileSync(linker, args, { stdio: 'inherit' })
     return
@@ -89,32 +103,38 @@ async function main() {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true })
       fs.writeFileSync(outputPath, data)
       fs.chmodSync(outputPath, 0o755)
+      log(`HIT ${outputName} (${data.length} bytes, key ${key.slice(0, 16)})`)
       return
     }
-  } catch {
+  } catch (e) {
+    log(`CACHE_ERROR ${outputName} get: ${e.message}`)
     // Cache check failed — continue to real linker
   }
 
   // Cache MISS — run real linker
   const linker = findRealLinker()
+  log(`MISS ${outputName} (linker=${linker}, key ${key.slice(0, 16)})`)
   execFileSync(linker, args, { stdio: 'inherit' })
 
   // Cache the output (non-fatal)
   try {
     if (fs.existsSync(outputPath)) {
+      const size = fs.statSync(outputPath).size
       await cache.put(key, outputPath)
+      log(`STORED ${outputName} (${size} bytes)`)
     }
-  } catch {
-    // Upload failed — non-fatal
+  } catch (e) {
+    log(`STORE_ERROR ${outputName}: ${e.message}`)
   }
 }
 
-main().catch(() => {
+main().catch((e) => {
+  log(`ERROR ${e.message}`)
   // On any error, fall back to real linker
   try {
     const linker = findRealLinker()
     execFileSync(linker, args, { stdio: 'inherit' })
-  } catch (e) {
-    process.exit(e.status || 1)
+  } catch (e2) {
+    process.exit(e2.status || 1)
   }
 })
