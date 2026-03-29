@@ -122,8 +122,8 @@ function parseValidInspectAddress(value: string): DebugAddress {
 }
 
 /**
- * Lazily parses raw process.argv for --project groups using the multi-project
- * helper. Avoids duplicating the inline require pattern at each call site.
+ * Lazily parses raw process.argv for --experimental-project groups using the
+ * multi-project helper.
  */
 function getProjectGroups() {
   const { parseProjectGroups } =
@@ -226,7 +226,7 @@ program
       process.env.NEXT_CPU_PROF_DIR = join(dir, '.next', 'cpu-profiles')
     }
 
-    // Multi-project detection: parse raw argv for --project groups
+    // Multi-project detection: parse raw argv for --experimental-project groups
     const projects = getProjectGroups()
     if (projects.length >= 2) {
       return import('../lib/multi-project.js').then((mod) =>
@@ -370,7 +370,7 @@ program
         process.env.NEXT_CPU_PROF_DIR = join(dir, '.next', 'cpu-profiles')
       }
 
-      // Multi-project detection: parse raw argv for --project groups
+      // Multi-project detection: parse raw argv for --experimental-project groups
       const projects = getProjectGroups()
       if (projects.length >= 2) {
         return import('../lib/multi-project.js').then((mod) =>
