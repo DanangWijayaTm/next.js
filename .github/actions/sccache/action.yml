@@ -38,7 +38,7 @@ runs:
 
         # Get all resolved flags (one per line) and extract the real linker.
         # cargo rustflags --list merges .cargo/config.toml + env RUSTFLAGS.
-        RESOLVED_FLAGS=$(cargo rustflags --list 2>/dev/null || echo "")
+        RESOLVED_FLAGS=$(cargo rustflags --list)
         REAL_LINKER=$(echo "$RESOLVED_FLAGS" | grep '^-Clinker=' | tail -1 | sed 's/^-Clinker=//' || echo "")
         echo "CACHED_LINKER_REAL=${REAL_LINKER}" >> $GITHUB_ENV
 
