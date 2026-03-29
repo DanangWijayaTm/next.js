@@ -27,6 +27,13 @@ runs:
         echo "SCCACHE_BASE_DIR=${{ inputs.base-dir || github.workspace }}" >> $GITHUB_ENV
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+        # Override the linker with our caching wrapper. Appends to existing
+        # RUSTFLAGS — last -Clinker= wins over .cargo/config.toml's setting.
+        CACHED_LINKER="${{ github.workspace }}/scripts/cached-linker"
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          CACHED_LINKER="${{ github.workspace }}/scripts/cached-linker.cmd"
+        fi
+        echo "RUSTFLAGS=${RUSTFLAGS} -Clinker=${CACHED_LINKER}" >> $GITHUB_ENV
 
     - name: Start sccache proxy
       if: ${{ inputs.mode == 'start' }}

@@ -1,0 +1,3 @@
+#!/bin/bash
+# Caching linker wrapper — delegates to cached-linker.js
+exec node "$(dirname "$0")/cached-linker.js" "$@"
