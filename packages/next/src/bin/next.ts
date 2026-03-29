@@ -582,8 +582,8 @@ internal
   )
   .addOption(
     new Option(
-      '--aggregated',
-      'Aggregate spans by name (default: true). Pass --no-aggregated to disable.'
+      '--no-aggregated',
+      'Disable aggregation of spans by name (aggregated by default).'
     )
   )
   .addOption(
