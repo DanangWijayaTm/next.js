@@ -26,7 +26,7 @@ export interface Binding {
       options: ProjectOptions,
       turboEngineOptions?: NapiTurboEngineOptions,
       callbacks?: TurbopackProjectCallbacks,
-      daemon?: { __napiType: 'DaemonHandle' }
+      daemon?: { __napiType: 'DaemonHandle' } | null
     ): Promise<Project>
     startTurbopackDaemon(socketPath: string): Promise<void>
     connectTurbopackDaemon(
