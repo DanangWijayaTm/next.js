@@ -1,4 +1,4 @@
-// test cached linker v2
+// test cached linker v3
 #![doc = include_str!("../README.md")]
 #![feature(trivial_bounds)]
 #![feature(min_specialization)]
