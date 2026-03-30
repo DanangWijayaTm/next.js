@@ -32,16 +32,25 @@ function log(msg) {
 
 // Find the real linker from CACHED_LINKER_REAL env var.
 // Set by the sccache action before overriding -Clinker=.
+// If rust-lld, resolve to the platform-specific flavor since the generic
+// driver doesn't know which mode to use when called directly.
 function findRealLinker() {
-  if (process.env.CACHED_LINKER_REAL) {
-    return process.env.CACHED_LINKER_REAL
+  let linker = process.env.CACHED_LINKER_REAL || ''
+
+  if (linker === 'rust-lld' || linker === '') {
+    // rust-lld is a generic driver — resolve to the correct flavor
+    if (process.platform === 'win32') return 'lld-link'
+    if (process.platform === 'darwin') return 'ld64.lld'
+    // Linux: rustc uses cc as the driver (gnu-lld-cc flavor), not lld directly
+    return 'cc'
   }
-  // Fallback: platform default
-  if (process.platform === 'linux') return 'cc'
-  return 'rust-lld'
+
+  return linker
 }
 
-// Parse linker args to find output path
+// Parse linker args to find output path.
+// Unix: -o path
+// Windows (lld-link/MSVC): /OUT:path
 function parseArgs() {
   let outputPath = null
   const flags = []
@@ -49,7 +58,10 @@ function parseArgs() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '-o' && i + 1 < args.length) {
       outputPath = args[i + 1]
-      i++ // skip the path
+      i++
+    } else if (args[i].startsWith('/OUT:')) {
+      outputPath = args[i].slice(5)
+      flags.push(args[i])
     } else {
       flags.push(args[i])
     }
