@@ -18,10 +18,10 @@ let DEV_BACKEND: DevRuntimeBackend
     unloadChunk(chunkUrl) {
       deleteResolver(chunkUrl)
 
-      // TODO(PACK-2140): remove this once all filenames are guaranteed to be escaped.
       // Strip query string so we match links regardless of cache-busting
       // params (e.g. ?ts=) that may differ between HMR updates.
       const baseChunkUrl = chunkUrl.split('?')[0]
+      // TODO(PACK-2140): remove this once all filenames are guaranteed to be escaped.
       const decodedBaseChunkUrl = decodeURI(baseChunkUrl)
 
       if (isCss(chunkUrl)) {
