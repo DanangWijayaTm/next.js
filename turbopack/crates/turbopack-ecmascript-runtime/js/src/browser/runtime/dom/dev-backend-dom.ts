@@ -72,7 +72,9 @@ let DEV_BACKEND: DevRuntimeBackend
 
         if (
           navigator.userAgent.includes('Firefox') ||
-          navigator.userAgent.includes('Safari')
+          (navigator.userAgent.includes('Safari') &&
+            !navigator.userAgent.includes('Chrome') &&
+            !navigator.userAgent.includes('Chromium'))
         ) {
           // Firefox won't reload CSS files that were previously loaded on the
           // current page: https://bugzilla.mozilla.org/show_bug.cgi?id=1037506
